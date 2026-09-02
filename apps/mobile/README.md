@@ -6,11 +6,10 @@ gateway's CORS and WebSocket-Origin guards refuse the WebView origin
 (verified in [`spikes/m0`](spikes/m0/README.md)). The agent itself runs
 elsewhere: point the app at any `hermes serve` bound to a reachable address.
 
-Status: **M5 — native value-add.** Approval notifications with Approve once /
-Deny actions and a "finished" notification while the app is in the
-background, a foreground service holding the process (and so the socket)
-alive, connectivity-triggered reconnect, share target, and dictation — on top
-of the M3 chat and M4 polish.
+Status: **M6 — connection UX.** QR pairing from the dashboard's "Mobile app"
+page (address only, never a credential), an in-app scanner, and a
+multi-gateway registry with per-gateway sessions in the encrypted store —
+on top of M3 chat, M4 polish, and M5 notifications.
 
 ## Layout
 
@@ -54,6 +53,25 @@ the app share one bundle, one typecheck, one test suite:
 - `web/src/components/chat/` — `MessageList`, `InputRequestCards`
   (ApprovalCard, ClarifyCard), `SecretPrompts` (sudo/secret bottom sheets),
   `Composer`; `web/src/pages/GatewayChatPage.tsx` ties them together.
+
+## Pairing and multiple gateways (M6)
+
+- The browser dashboard's **Mobile app** page (`/mobile`) renders a QR of
+  `hermes-gateway:{"v":1,"origin","basePath","name"}` for the URL the phone
+  should use (editable; defaults to the dashboard's own origin) and shows
+  readiness: auth gate on, `native_pkce` advertised, plain http or not. The
+  payload never carries a credential — sign-in follows on the phone. Encoding
+  and decoding live in `apps/shared/src/mobile-pairing.ts`; a bare http(s) URL
+  in a QR decodes too.
+- The Connection screen's **Scan QR** uses `getUserMedia` + `jsqr` in the
+  WebView (no ML Kit / Play services dependency, works on de-Googled
+  phones); it fills the URL and name, then Sign in proceeds as usual.
+- `HermesTokenStore` now keeps one session per gateway (keyed by origin +
+  base path) plus the active pointer, migrating the M2 single-session layout
+  on first read. `HermesAuth.listSessions / switchSession / removeSession`
+  back the **Saved gateways** list: tap to switch (the chat controller drops
+  its socket and reconnects to the new target), trash to forget. A non-secret
+  registry in `localStorage` keeps names and last-use times.
 
 ## Native shell (M5)
 
@@ -165,6 +183,11 @@ can authenticate to it.
   replayed via `approval.pending`, and Deny was applied (the directory
   survived, the tool reported "Command denied").
 
+- M6: unit-tested (payload round trip and rejection table, registry
+  list/switch/forget, bridge mapping) and the APK builds; **not yet run on
+  the phone** (it disconnected before install). First device checks: the
+  migrated session still signs in, Saved gateways lists it, Scan QR opens the
+  camera and decodes the dashboard's code.
 - M5 on the Pixel 8 Pro: notification permission prompt on first connect;
   with the app backgrounded, an approval raised a notification carrying the
   command; **Deny tapped from the shade** reached the gateway (the tool

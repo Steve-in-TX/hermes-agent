@@ -6,13 +6,17 @@
  * Fallback: paste an access token (kept for gateways without the native
  * flow and for testing without a browser). M6 adds QR pairing on top.
  */
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useNavigate } from "react-router";
+import { QrCode, Trash2 } from "lucide-react";
 
 import { Button } from "@nous-research/ui/ui/components/button";
 import { Input } from "@nous-research/ui/ui/components/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
 
+import { decodePairingPayload } from "@hermes/shared";
+
+import { QrScanner, canScanQr } from "@/components/QrScanner";
 import { isCleartextOrigin, normalizeGatewayUrl } from "@/lib/backend-target";
 import {
   probeGatewayStatus,
@@ -22,9 +26,14 @@ import {
 import {
   connectWithToken,
   disconnect,
+  forgetGateway,
+  listGateways,
   signIn,
+  switchGateway,
   useMobileConnection,
+  type KnownGateway,
 } from "@/lib/mobile-connection";
+import { getChatController } from "@/pages/GatewayChatPage";
 import {
   NativeAuthError,
   chooseRedirectMode,
@@ -71,6 +80,21 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
   const [busy, setBusy] = useState<"probe" | "signin" | "token" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [probe, setProbe] = useState<string | null>(null);
+  const [name, setName] = useState<string | undefined>(undefined);
+  const [scanning, setScanning] = useState(false);
+  const [gateways, setGateways] = useState<KnownGateway[]>([]);
+  const [gatewaysNonce, setGatewaysNonce] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    listGateways().then((list) => {
+      if (!cancelled) setGateways(list);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [connection, gatewaysNonce]);
+
   const cleartext = (() => {
     try {
       return isCleartextOrigin(normalizeGatewayUrl(url).origin);
@@ -94,6 +118,46 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
     }
   };
 
+  const handleScan = useCallback((text: string) => {
+    setScanning(false);
+    const payload = decodePairingPayload(text);
+    if (!payload) {
+      setError("That code is not a Hermes gateway pairing code.");
+      return;
+    }
+    setError(null);
+    setUrl(`${payload.origin}${payload.basePath}`);
+    setName(payload.name);
+    setProbe(null);
+  }, []);
+
+  const handleSwitch = async (gw: KnownGateway) => {
+    setError(null);
+    if (!gw.signedIn) {
+      setUrl(`${gw.origin}${gw.basePath}`);
+      setName(gw.name);
+      return;
+    }
+    setBusy("signin");
+    try {
+      if (await switchGateway(gw.origin, gw.basePath)) {
+        getChatController().switchGateway();
+        navigate("/chat", { replace: true });
+      } else {
+        setUrl(`${gw.origin}${gw.basePath}`);
+      }
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleForget = async (gw: KnownGateway) => {
+    await forgetGateway(gw.origin, gw.basePath);
+    setGatewaysNonce((n) => n + 1);
+  };
+
   const handleSignIn = async () => {
     setError(null);
     setBusy("signin");
@@ -103,7 +167,8 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
       if (!gatewaySupportsNativeLogin(status.auth_flows)) {
         throw new Error("This gateway is too old for native sign-in. Update it, or paste a token below.");
       }
-      await signIn({ origin, basePath, redirectMode: chooseRedirectMode(status.auth_flows) });
+      await signIn({ origin, basePath, redirectMode: chooseRedirectMode(status.auth_flows), name });
+      getChatController().switchGateway();
       navigate("/chat", { replace: true });
     } catch (err) {
       setError(describeError(err));
@@ -120,15 +185,19 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
       const trimmedToken = token.trim();
       if (!trimmedToken) throw new Error("Paste an access token.");
       const me = await verifyGatewayBearer(origin, basePath, trimmedToken);
-      await connectWithToken({
-        origin,
-        basePath,
-        accessToken: trimmedToken,
-        expiresAt: me.expires_at ?? 0,
-        userId: me.user_id,
-        provider: me.provider,
-      });
+      await connectWithToken(
+        {
+          origin,
+          basePath,
+          accessToken: trimmedToken,
+          expiresAt: me.expires_at ?? 0,
+          userId: me.user_id,
+          provider: me.provider,
+        },
+        name,
+      );
       setToken("");
+      getChatController().switchGateway();
       navigate("/chat", { replace: true });
     } catch (err) {
       setError(describeError(err));
@@ -200,6 +269,11 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
           )}
 
           <div className="flex flex-wrap gap-2">
+            {canScanQr() && (
+              <Button outlined onClick={() => setScanning(true)} disabled={busy !== null} prefix={<QrCode className="size-4" />}>
+                Scan QR
+              </Button>
+            )}
             <Button onClick={() => void handleProbe()} disabled={busy !== null}>
               {busy === "probe" ? "Testing…" : "Test connection"}
             </Button>
@@ -248,6 +322,45 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
           )}
         </CardContent>
       </Card>
+
+      {gateways.length > 0 && (
+        <Card className="mt-4">
+          <CardHeader>
+            <CardTitle>Saved gateways</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-col gap-2">
+            {gateways.map((gw) => {
+              const isCurrent =
+                !!connection && connection.origin === gw.origin && connection.basePath === gw.basePath;
+              return (
+                <div key={`${gw.origin}${gw.basePath}`} className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    className="flex min-h-12 min-w-0 flex-1 flex-col items-start rounded border border-border px-3 py-2 text-left"
+                    disabled={busy !== null || isCurrent}
+                    onClick={() => void handleSwitch(gw)}
+                  >
+                    <span className="truncate text-sm font-medium">
+                      {gw.name || gw.origin}
+                      {isCurrent ? " · current" : ""}
+                    </span>
+                    <span className="truncate font-mono text-xs opacity-70">
+                      {gw.origin}
+                      {gw.basePath}
+                      {gw.signedIn ? ` · ${gw.userId ?? "signed in"}` : " · sign in required"}
+                    </span>
+                  </button>
+                  <Button ghost size="icon" aria-label={`Forget ${gw.name || gw.origin}`} disabled={busy !== null} onClick={() => void handleForget(gw)}>
+                    <Trash2 className="size-4" />
+                  </Button>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
+
+      {scanning && <QrScanner onResult={handleScan} onClose={() => setScanning(false)} />}
     </div>
   );
 }

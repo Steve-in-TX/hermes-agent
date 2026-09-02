@@ -56,6 +56,7 @@ import {
   X,
   Zap,
   Wifi,
+  Smartphone,
 } from "lucide-react";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { SelectionSwitcher } from "@nous-research/ui/ui/components/selection-switcher";
@@ -105,6 +106,7 @@ const ChatPage =
     : lazy(() => import("@/pages/ChatPage"));
 const ConnectionPage = lazy(() => import("@/pages/ConnectionPage"));
 const GatewayChatPage = lazy(() => import("@/pages/GatewayChatPage"));
+const MobilePairingPage = lazy(() => import("@/pages/MobilePairingPage"));
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { useI18n } from "@/i18n";
@@ -177,6 +179,7 @@ const BUILTIN_ROUTES_CORE: Record<string, ComponentType> = {
   "/channels": ChannelsPage,
   "/webhooks": WebhooksPage,
   "/system": SystemPage,
+  "/mobile": MobilePairingPage,
   "/profiles": ProfilesPage,
   "/profiles/new": ProfileBuilderPage,
   "/config": ConfigPage,
@@ -224,6 +227,7 @@ const BUILTIN_NAV_REST: NavItem[] = [
   { path: "/config", labelKey: "config", label: "Config", icon: Settings },
   { path: "/env", labelKey: "keys", label: "Keys", icon: KeyRound },
   { path: "/system", label: "System", icon: Wrench },
+  { path: "/mobile", label: "Mobile app", icon: Smartphone },
   {
     path: "/docs",
     labelKey: "documentation",

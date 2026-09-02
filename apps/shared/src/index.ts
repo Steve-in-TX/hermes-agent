@@ -130,3 +130,10 @@ export {
   type SecretRequest,
   type SudoRequest
 } from './chat-input-requests'
+export {
+  decodePairingPayload,
+  encodePairingPayload,
+  gatewayKey,
+  PAIRING_SCHEME,
+  type PairingPayload
+} from './mobile-pairing'

@@ -8,11 +8,15 @@ import {
   bootstrapMobileConnection,
   connectWithToken,
   disconnect,
+  forgetGateway,
   getAccessToken,
   getCurrentConnection,
+  listGateways,
   loadSavedSession,
   refreshSession,
+  rememberGateway,
   signIn,
+  switchGateway,
 } from "./mobile-connection";
 import {
   NativeAuthError,
@@ -48,6 +52,11 @@ function fakeBridge(overrides: Partial<NativeAuthBridge> = {}): NativeAuthBridge
       return s;
     }),
     logout: vi.fn(async () => {
+      stored = null;
+    }),
+    listSessions: vi.fn(async () => (stored ? [stored] : [])),
+    switchSession: vi.fn(async (origin: string) => (stored && stored.origin === origin ? stored : null)),
+    removeSession: vi.fn(async () => {
       stored = null;
     }),
     ...overrides,
@@ -98,6 +107,47 @@ describe("without a native bridge (browser dev)", () => {
   it("ignores malformed saved sessions", () => {
     window.localStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify({ origin: "x" }));
     expect(loadSavedSession()).toBeNull();
+  });
+});
+
+describe("gateway registry", () => {
+  it("lists remembered gateways with sign-in state, most recent first", async () => {
+    const bridge = fakeBridge({ listSessions: vi.fn(async () => [SESSION]) });
+    setNativeAuthBridge(bridge);
+    rememberGateway("https://old.example", "", "old");
+    vi.setSystemTime(Date.now() + 1000);
+    rememberGateway(SESSION.origin, SESSION.basePath, "studio");
+    const list = await listGateways();
+    expect(list.map((g) => [g.name, g.signedIn, g.userId])).toEqual([
+      ["studio", true, "steve"],
+      ["old", false, undefined],
+    ]);
+  });
+
+  it("switches to a signed-in gateway and refuses one without a session", async () => {
+    const bridge = fakeBridge({
+      listSessions: vi.fn(async () => [SESSION]),
+      switchSession: vi.fn(async (origin: string) => (origin === SESSION.origin ? SESSION : null)),
+    });
+    setNativeAuthBridge(bridge);
+    await expect(switchGateway("https://nowhere.example", "")).resolves.toBe(false);
+    expect(isRemoteTarget()).toBe(false);
+    await expect(switchGateway(SESSION.origin, SESSION.basePath)).resolves.toBe(true);
+    expect(getBackendTarget().bearer()).toBe("tok-1");
+    expect((await listGateways())[0]).toMatchObject({ origin: SESSION.origin, signedIn: true });
+  });
+
+  it("forgetting the active gateway signs out; forgetting another does not", async () => {
+    const bridge = fakeBridge();
+    setNativeAuthBridge(bridge);
+    rememberGateway("https://other.example", "", "other");
+    applySession(SESSION);
+    await forgetGateway("https://other.example", "");
+    expect(getCurrentConnection()).not.toBeNull();
+    await forgetGateway(SESSION.origin, SESSION.basePath);
+    expect(bridge.removeSession).toHaveBeenCalledWith(SESSION.origin, SESSION.basePath);
+    expect(getCurrentConnection()).toBeNull();
+    expect(await listGateways()).toEqual([]);
   });
 });
 

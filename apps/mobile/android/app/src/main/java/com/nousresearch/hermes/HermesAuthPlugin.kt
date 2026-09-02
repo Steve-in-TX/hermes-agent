@@ -4,6 +4,7 @@ import android.content.Intent
 import android.net.Uri
 import android.util.Base64
 import androidx.browser.customtabs.CustomTabsIntent
+import com.getcapacitor.JSArray
 import com.getcapacitor.JSObject
 import com.getcapacitor.Plugin
 import com.getcapacitor.PluginCall
@@ -105,6 +106,34 @@ class HermesAuthPlugin : Plugin() {
     @PluginMethod
     fun logout(call: PluginCall) {
         store.clear()
+        call.resolve()
+    }
+
+    // ── multi-gateway (M6) ────────────────────────────────────────
+
+    @PluginMethod
+    fun listSessions(call: PluginCall) {
+        val arr = JSArray()
+        for (session in store.list()) arr.put(session.toJs())
+        val ret = JSObject()
+        ret.put("sessions", arr)
+        call.resolve(ret)
+    }
+
+    @PluginMethod
+    fun switchSession(call: PluginCall) {
+        val origin = call.getString("origin") ?: return call.reject("origin required", "failed")
+        val basePath = call.getString("basePath") ?: ""
+        val session = store.switchTo(origin, basePath)
+        val ret = JSObject()
+        ret.put("session", session?.toJs() ?: JSONObject.NULL)
+        call.resolve(ret)
+    }
+
+    @PluginMethod
+    fun removeSession(call: PluginCall) {
+        val origin = call.getString("origin") ?: return call.reject("origin required", "failed")
+        store.remove(origin, call.getString("basePath") ?: "")
         call.resolve()
     }
 

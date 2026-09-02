@@ -22,7 +22,7 @@ import { getNativeShellBridge, notificationSnippet, type NativeShellBridge } fro
 
 import { messagesFromHistory } from "./hydrate";
 import { appendUserMessage, applyGatewayEvent, markInterrupted } from "./reducer";
-import { getSessionState, getShell, hasSession, setSessionState, updateSession, updateShell } from "./store";
+import { getSessionState, getShell, hasSession, resetChatStore, setSessionState, updateSession, updateShell } from "./store";
 import { createSessionChatState, messageText, type HistoryRecord, type SessionChatState } from "./types";
 
 /** What the controller needs from `web/src/lib/gatewayClient.ts` (`connect()` resolves auth itself). */
@@ -167,6 +167,20 @@ export class ChatController {
       this.reconnectTimer = null;
       void this.connect();
     }, delay);
+  }
+
+  /**
+   * The backend target changed (another gateway was made active): drop the
+   * socket and every session, then connect to the new target.
+   */
+  switchGateway(): void {
+    if (this.reconnectTimer !== null) {
+      this.opts.clearTimer(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
+    this.teardownClient();
+    resetChatStore();
+    void this.connect();
   }
 
   /** Foreground/network came back: reconnect now instead of waiting out the backoff. */

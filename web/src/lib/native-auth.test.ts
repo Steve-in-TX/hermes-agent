@@ -57,9 +57,15 @@ describe("capacitor bridge", () => {
       refresh: vi.fn(async () => ({ session })),
       setSession: vi.fn(async () => ({ session })),
       logout: vi.fn(async () => {}),
+      listSessions: vi.fn(async () => ({ sessions: [session] })),
+      switchSession: vi.fn(async () => ({ session })),
+      removeSession: vi.fn(async () => {}),
     };
     const bridge = createCapacitorAuthBridge(plugin);
     expect(bridge.available).toBe(true);
+    await expect(bridge.listSessions()).resolves.toEqual([session]);
+    await expect(bridge.switchSession("https://gw", "")).resolves.toEqual(session);
+    expect(plugin.switchSession).toHaveBeenCalledWith({ origin: "https://gw", basePath: "" });
     await expect(bridge.getSession()).resolves.toEqual(session);
     await expect(bridge.login({ origin: "https://gw", basePath: "", redirectMode: "scheme" })).resolves.toEqual(session);
     expect(plugin.login).toHaveBeenCalledWith({ origin: "https://gw", basePath: "", redirectMode: "scheme" });
@@ -78,6 +84,9 @@ describe("capacitor bridge", () => {
       logout: vi.fn(async () => {
         throw new Error("boom");
       }),
+      listSessions: vi.fn(async () => ({ sessions: [] })),
+      switchSession: vi.fn(async () => ({ session: null })),
+      removeSession: vi.fn(async () => {}),
     };
     const bridge = createCapacitorAuthBridge(plugin);
     await expect(bridge.login({ origin: "https://gw", basePath: "", redirectMode: "loopback" })).rejects.toMatchObject({

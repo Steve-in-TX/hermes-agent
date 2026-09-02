@@ -50,7 +50,13 @@ export interface NativeAuthBridge {
   refresh(): Promise<NativeSession>;
   /** Manual path: keep a pasted token in the same encrypted store. */
   setSession(session: NativeSession): Promise<NativeSession>;
+  /** Sign out of the active gateway only. */
   logout(): Promise<void>;
+  /** Every gateway with a stored session (access tokens included; JS holds them in memory anyway). */
+  listSessions(): Promise<NativeSession[]>;
+  /** Make a stored gateway active; null when it has no session. */
+  switchSession(origin: string, basePath: string): Promise<NativeSession | null>;
+  removeSession(origin: string, basePath: string): Promise<void>;
 }
 
 const NOT_HERE = "Native sign-in is only available in the Hermes app.";
@@ -66,6 +72,9 @@ export const unavailableAuthBridge: NativeAuthBridge = {
   },
   setSession: async (session) => session,
   logout: async () => {},
+  listSessions: async () => [],
+  switchSession: async () => null,
+  removeSession: async () => {},
 };
 
 let bridge: NativeAuthBridge = unavailableAuthBridge;

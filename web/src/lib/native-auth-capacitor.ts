@@ -17,6 +17,9 @@ interface HermesAuthPlugin {
   refresh(): Promise<{ session: NativeSession }>;
   setSession(session: NativeSession & { refreshToken?: string }): Promise<{ session: NativeSession }>;
   logout(): Promise<void>;
+  listSessions(): Promise<{ sessions: NativeSession[] }>;
+  switchSession(opts: { origin: string; basePath: string }): Promise<{ session: NativeSession | null }>;
+  removeSession(opts: { origin: string; basePath: string }): Promise<void>;
 }
 
 /** Capacitor rejections carry ``{ message, code }``; map them to ``NativeAuthError``. */
@@ -44,6 +47,9 @@ export function createCapacitorAuthBridge(plugin: HermesAuthPlugin): NativeAuthB
     refresh: () => wrap(async () => (await plugin.refresh()).session),
     setSession: (session) => wrap(async () => (await plugin.setSession(session)).session),
     logout: () => wrap(() => plugin.logout()),
+    listSessions: () => wrap(async () => (await plugin.listSessions()).sessions ?? []),
+    switchSession: (origin, basePath) => wrap(async () => (await plugin.switchSession({ origin, basePath })).session ?? null),
+    removeSession: (origin, basePath) => wrap(() => plugin.removeSession({ origin, basePath })),
   };
 }
 

@@ -12,6 +12,8 @@
  */
 import { useSyncExternalStore } from "react";
 
+import { gatewayKey } from "@hermes/shared";
+
 import { REAUTH_EVENT, setBackendTarget, type ReauthDetail } from "@/lib/backend-target";
 import {
   NativeAuthError,
@@ -31,6 +33,19 @@ export interface ConnectionInfo {
 }
 
 export const CONNECTION_STORAGE_KEY = "hermes.mobile.connection";
+/** Non-secret registry of gateways the phone has used (names, last use). */
+export const GATEWAYS_STORAGE_KEY = "hermes.mobile.gateways";
+
+export interface KnownGateway {
+  origin: string;
+  basePath: string;
+  name?: string;
+  lastUsedAt: number;
+  /** A stored session exists (signed in). */
+  signedIn: boolean;
+  userId?: string;
+  provider?: string;
+}
 
 type StorageLike = Pick<Storage, "getItem" | "removeItem" | "setItem">;
 
@@ -98,6 +113,107 @@ export function clearSavedSession(storage: StorageLike | null = defaultStorage()
     storage?.removeItem(CONNECTION_STORAGE_KEY);
   } catch {
     /* ignore */
+  }
+}
+
+// ── gateway registry (names + last use; tokens live in the native store) ──
+
+interface GatewayRecord {
+  origin: string;
+  basePath: string;
+  name?: string;
+  lastUsedAt: number;
+}
+
+function readRegistry(storage: StorageLike | null = defaultStorage()): Record<string, GatewayRecord> {
+  try {
+    const raw = storage?.getItem(GATEWAYS_STORAGE_KEY);
+    const parsed: unknown = raw ? JSON.parse(raw) : {};
+    if (typeof parsed !== "object" || parsed === null) return {};
+    const out: Record<string, GatewayRecord> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      const rec = value as Partial<GatewayRecord>;
+      if (typeof rec?.origin !== "string") continue;
+      out[key] = {
+        origin: rec.origin,
+        basePath: typeof rec.basePath === "string" ? rec.basePath : "",
+        name: typeof rec.name === "string" ? rec.name : undefined,
+        lastUsedAt: typeof rec.lastUsedAt === "number" ? rec.lastUsedAt : 0,
+      };
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writeRegistry(registry: Record<string, GatewayRecord>, storage: StorageLike | null = defaultStorage()): void {
+  try {
+    storage?.setItem(GATEWAYS_STORAGE_KEY, JSON.stringify(registry));
+  } catch {
+    /* ignore */
+  }
+}
+
+/** Record a gateway as used now (optionally naming it). */
+export function rememberGateway(origin: string, basePath: string, name?: string, storage: StorageLike | null = defaultStorage()): void {
+  const registry = readRegistry(storage);
+  const key = gatewayKey(origin, basePath);
+  const prev = registry[key];
+  registry[key] = { origin, basePath, name: name ?? prev?.name, lastUsedAt: Date.now() };
+  writeRegistry(registry, storage);
+}
+
+export function forgetGatewayRecord(origin: string, basePath: string, storage: StorageLike | null = defaultStorage()): void {
+  const registry = readRegistry(storage);
+  delete registry[gatewayKey(origin, basePath)];
+  writeRegistry(registry, storage);
+}
+
+/** Registry ∪ native sessions, most recently used first. */
+export async function listGateways(storage: StorageLike | null = defaultStorage()): Promise<KnownGateway[]> {
+  const registry = readRegistry(storage);
+  const bridge = getNativeAuthBridge();
+  const sessions = bridge.available ? await bridge.listSessions().catch(() => []) : [loadSavedSession(storage)].filter((s): s is NativeSession => !!s);
+  const byKey = new Map<string, KnownGateway>();
+  for (const [key, rec] of Object.entries(registry)) {
+    byKey.set(key, { origin: rec.origin, basePath: rec.basePath, name: rec.name, lastUsedAt: rec.lastUsedAt, signedIn: false });
+  }
+  for (const s of sessions) {
+    const key = gatewayKey(s.origin, s.basePath);
+    const prev = byKey.get(key);
+    byKey.set(key, {
+      origin: s.origin,
+      basePath: s.basePath,
+      name: prev?.name,
+      lastUsedAt: prev?.lastUsedAt ?? 0,
+      signedIn: true,
+      userId: s.userId || undefined,
+      provider: s.provider || undefined,
+    });
+  }
+  return [...byKey.values()].sort((a, b) => b.lastUsedAt - a.lastUsedAt);
+}
+
+/** Make another signed-in gateway active. Resolves false when it has no session. */
+export async function switchGateway(origin: string, basePath: string): Promise<boolean> {
+  const bridge = getNativeAuthBridge();
+  const session = bridge.available ? await bridge.switchSession(origin, basePath) : null;
+  if (!session) return false;
+  rememberGateway(origin, basePath);
+  applySession(session);
+  return true;
+}
+
+/** Drop a gateway's stored session and registry entry; disconnect if it was active. */
+export async function forgetGateway(origin: string, basePath: string): Promise<void> {
+  const bridge = getNativeAuthBridge();
+  const wasActive = current !== null && gatewayKey(current.origin, current.basePath) === gatewayKey(origin, basePath);
+  if (bridge.available) await bridge.removeSession(origin, basePath).catch(() => {});
+  forgetGatewayRecord(origin, basePath);
+  if (wasActive) {
+    clearSavedSession();
+    applySession(null);
   }
 }
 
@@ -181,17 +297,19 @@ export function refreshSession(): Promise<boolean> {
 }
 
 /** RFC 8252 sign-in through the system browser (native bridge required). */
-export async function signIn(opts: NativeLoginOptions): Promise<ConnectionInfo> {
+export async function signIn(opts: NativeLoginOptions & { name?: string }): Promise<ConnectionInfo> {
   const session = await getNativeAuthBridge().login(opts);
+  rememberGateway(session.origin, session.basePath, opts.name);
   applySession(session);
   return current as ConnectionInfo;
 }
 
 /** Manual path: a pasted access token, kept in the native store when present. */
-export async function connectWithToken(session: NativeSession): Promise<ConnectionInfo> {
+export async function connectWithToken(session: NativeSession, name?: string): Promise<ConnectionInfo> {
   const bridge = getNativeAuthBridge();
   const stored = bridge.available ? await bridge.setSession(session) : session;
   if (!bridge.available) saveSession(stored);
+  rememberGateway(stored.origin, stored.basePath, name);
   applySession(stored);
   return current as ConnectionInfo;
 }
