@@ -57,6 +57,8 @@ function fakeClient() {
     "approval.received": () => ({ acknowledged: true }),
     "clarify.respond": () => ({ status: "ok" }),
     "session.interrupt": () => ({ status: "interrupted" }),
+    "image.attach_bytes": () => ({ attached: true, count: 1 }),
+    "slash.exec": (p) => ({ output: `ran ${String(p.command)}` }),
   };
   const client = {
     get connectionState() {
@@ -275,6 +277,28 @@ describe("ChatController", () => {
     emit("networkAvailable", {});
     await vi.advanceTimersByTimeAsync(0);
     expect(fake.client.connect).toHaveBeenCalledTimes(2);
+    ctl.dispose();
+  });
+
+  it("stages an image on a lazily created session", async () => {
+    const fake = fakeClient();
+    const ctl = new ChatController({ createClient: () => fake.client });
+    await ctl.connect();
+    await expect(ctl.attachImage("AAAA", "shot.jpg")).resolves.toBe(1);
+    expect(fake.calls.map((c) => c.method)).toEqual(["session.create", "image.attach_bytes"]);
+    expect(fake.calls[1].params).toEqual({ session_id: "rt1", content_base64: "AAAA", filename: "shot.jpg" });
+    ctl.dispose();
+  });
+
+  it("runs a slash command and records its output as a system line", async () => {
+    const fake = fakeClient();
+    const ctl = new ChatController({ createClient: () => fake.client });
+    await ctl.connect();
+    await ctl.runSlash("/status");
+    expect(fake.calls.at(-1)).toEqual({ method: "slash.exec", params: { command: "status", session_id: "rt1" } });
+    const last = getSessionState("rt1").messages.at(-1)!;
+    expect(last.role).toBe("system");
+    expect(last.parts[0]).toEqual({ type: "text", text: "ran status" });
     ctl.dispose();
   });
 

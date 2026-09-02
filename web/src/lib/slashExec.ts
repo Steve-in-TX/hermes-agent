@@ -42,7 +42,7 @@ export interface SlashExecOptions {
   command: string;
   /** Session id. If empty the call is still issued — some commands are session-less. */
   sessionId: string;
-  gw: GatewayClient;
+  gw: Pick<GatewayClient, "request">;
   callbacks: SlashExecCallbacks;
 }
 

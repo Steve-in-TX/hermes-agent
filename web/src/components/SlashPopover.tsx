@@ -33,7 +33,7 @@ export interface SlashPopoverHandle {
 
 interface Props {
   input: string;
-  gw: GatewayClient | null;
+  gw: Pick<GatewayClient, "request"> | null;
   onApply(nextInput: string): void;
 }
 

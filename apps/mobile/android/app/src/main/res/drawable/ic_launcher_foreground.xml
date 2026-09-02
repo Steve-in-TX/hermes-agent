@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Hermes mark: an "H" with an accent crossbar, inside the 66dp safe zone of the 108dp adaptive-icon canvas. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <path android:fillColor="#FFE8CD" android:pathData="M32,30h8v48h-8z" />
+    <path android:fillColor="#FFE8CD" android:pathData="M68,30h8v48h-8z" />
+    <path android:fillColor="#CD7F32" android:pathData="M40,50h28v8h-28z" />
+</vector>

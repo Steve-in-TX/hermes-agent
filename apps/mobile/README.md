@@ -213,14 +213,23 @@ Device findings to carry forward:
   WebViews); the fixed header, its spacer, and the drawer honour them, and
   `SystemBars.style: "DARK"` paints light status-bar icons over the dark chrome.
 
-## Not in M3 core (next)
+## Chat polish (post-M7)
 
-- Slash commands (`SlashPopover` + `slashExec` exist in web/ and only need a
-  live `GatewayClient`), image/file attachments (`image.attach_bytes`), model
-  picker on the chat page, message reactions.
-- Moving the desktop's `lib/chat-messages` (tool-part projection, timeline
-  reconciliation) into `apps/shared` so both clients share one message model;
-  today mobile has its own minimal reducer.
+- Slash commands: a draft starting with `/` shows the gateway's completions
+  (`SlashPopover` → `complete.slash`) and sends through `slash.exec`
+  (`slashExec`); output lands as a system block in the transcript.
+- Image attachments: the composer's attach button reads a picture and stages
+  it with `image.attach_bytes`; the next message consumes it.
+- Model picker: the chip icon in the chat header opens `ModelPickerDialog` on
+  the same REST path as the dashboard (new chats use the choice).
+- App icon and splash: a generated "H" mark (vector adaptive icon, legacy
+  mipmaps, splash PNGs) — placeholders until branding lands.
+- QR: `mobile-pairing.qr.test.ts` renders a real code with `qrcode` and
+  decodes it with `jsqr`, the phone's decoder.
+
+Still open: message reactions; moving the desktop's `lib/chat-messages`
+(tool-part projection, timeline reconciliation) into `apps/shared` so both
+clients share one message model — mobile has its own minimal reducer.
 - After a reconnect the transcript is rebuilt from history, so a tool that was
   running when the socket dropped has no card until its `tool.complete`
   arrives (history carries no tool row until then). Reusing the shared

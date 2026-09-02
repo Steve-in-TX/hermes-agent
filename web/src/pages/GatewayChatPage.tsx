@@ -11,7 +11,7 @@
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router";
-import { List, Plus } from "lucide-react";
+import { Cpu, List, Plus } from "lucide-react";
 
 import { Badge } from "@nous-research/ui/ui/components/badge";
 import { BottomSheet } from "@nous-research/ui/ui/components/bottom-sheet";
@@ -20,6 +20,7 @@ import { Toast } from "@nous-research/ui/ui/components/toast";
 import { useToast } from "@nous-research/ui/hooks/use-toast";
 
 import { ChatSessionList } from "@/components/ChatSessionList";
+import { ModelPickerDialog } from "@/components/ModelPickerDialog";
 import { Composer } from "@/components/chat/Composer";
 import { ApprovalCard, ClarifyCard } from "@/components/chat/InputRequestCards";
 import { MessageList } from "@/components/chat/MessageList";
@@ -27,6 +28,7 @@ import { SecretPrompts } from "@/components/chat/SecretPrompts";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { ChatController } from "@/lib/chat/controller";
 import { useChatShell, useSessionChat } from "@/lib/chat/store";
+import { api } from "@/lib/api";
 import { GatewayClient } from "@/lib/gatewayClient";
 import { getNativeShellBridge } from "@/lib/native-shell";
 
@@ -57,6 +59,7 @@ export default function GatewayChatPage() {
   const { toast, showToast } = useToast();
   const { setTitle, setEnd } = usePageHeader();
   const [pickerOpen, setPickerOpen] = useState(false);
+  const [modelOpen, setModelOpen] = useState(false);
   const lastResumeRef = useRef<string | null>(null);
   const shell = getNativeShellBridge();
   const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
@@ -112,6 +115,9 @@ export default function GatewayChatPage() {
         <Badge tone={CONNECTION_TONE[shellState.connection]} className="text-xs">
           {shellState.connection === "open" ? (session.model ?? "connected") : shellState.connection}
         </Badge>
+        <Button ghost size="icon" aria-label="Model" onClick={() => setModelOpen(true)}>
+          <Cpu className="size-5" />
+        </Button>
         <Button ghost size="icon" aria-label="Sessions" onClick={() => setPickerOpen(true)}>
           <List className="size-5" />
         </Button>
@@ -173,7 +179,34 @@ export default function GatewayChatPage() {
         onStop={() => ctl.interrupt().catch(report)}
         onDictate={shell.available ? () => shell.startDictation() : undefined}
         prefill={prefill}
+        gateway={ctl.gateway}
+        onSlash={(command) => ctl.runSlash(command).catch(report)}
+        onAttach={(base64, filename) => ctl.attachImage(base64, filename).then(() => {}).catch(report)}
       />
+
+      {modelOpen && (
+        <ModelPickerDialog
+          // Same REST path the dashboard's Models page and ChatSidebar use;
+          // the choice becomes the default for new chats.
+          loader={() => api.getModelOptions()}
+          alwaysGlobal
+          title="Model for new chats"
+          onApply={async ({ provider, model, confirmExpensiveModel }) => {
+            const result = await api.setModelAssignment({
+              confirm_expensive_model: confirmExpensiveModel,
+              scope: "main",
+              provider,
+              model,
+            });
+            if (!result.confirm_required) {
+              showToast(`New chats will use ${model.split("/").slice(-1)[0]}`, "success");
+              setModelOpen(false);
+            }
+            return result;
+          }}
+          onClose={() => setModelOpen(false)}
+        />
+      )}
 
       {sid && (
         <SecretPrompts

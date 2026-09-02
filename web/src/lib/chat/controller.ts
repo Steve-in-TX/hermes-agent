@@ -21,7 +21,9 @@ import { getBackendTarget } from "@/lib/backend-target";
 import { getNativeShellBridge, notificationSnippet, type NativeShellBridge } from "@/lib/native-shell";
 
 import { messagesFromHistory } from "./hydrate";
-import { appendUserMessage, applyGatewayEvent, markInterrupted } from "./reducer";
+import { executeSlash } from "@/lib/slashExec";
+
+import { appendSystemMessage, appendUserMessage, applyGatewayEvent, markInterrupted } from "./reducer";
 import { getSessionState, getShell, hasSession, resetChatStore, setSessionState, updateSession, updateShell } from "./store";
 import { createSessionChatState, messageText, type HistoryRecord, type SessionChatState } from "./types";
 
@@ -110,6 +112,11 @@ export class ChatController {
 
   get activeSessionId(): string | null {
     return getShell().activeSessionId;
+  }
+
+  /** The live client for components that speak RPC directly (slash completion). */
+  get gateway(): Pick<Client, "request"> | null {
+    return this.client && this.client.connectionState === "open" ? this.client : null;
   }
 
   /** Open the socket (idempotent). Resolves once `gateway.ready` has been seen. */
@@ -374,6 +381,49 @@ export class ChatController {
       }));
       throw err;
     }
+  }
+
+  /** Make sure a session exists and return its id (creating or resuming as needed). */
+  private async ensureSession(): Promise<string> {
+    let sid = this.activeSessionId;
+    if (!sid || getSessionState(sid).reclaimed) {
+      const stored = sid ? getSessionState(sid).storedSessionId : null;
+      sid = stored ? await this.resumeSession(stored) : await this.createSession();
+    }
+    return sid;
+  }
+
+  /**
+   * Stage an image for the next prompt (`image.attach_bytes`): the gateway
+   * keeps it on the session and consumes it with the next `prompt.submit`.
+   */
+  async attachImage(base64: string, filename: string): Promise<number> {
+    const sid = await this.ensureSession();
+    const res = await this.request<{ attached?: boolean; count?: number }>("image.attach_bytes", {
+      session_id: sid,
+      content_base64: base64,
+      filename,
+    });
+    return res.count ?? 0;
+  }
+
+  /**
+   * Run a `/command` through the gateway's slash dispatcher. Output lands in
+   * the transcript as a system line; a `send` directive becomes a prompt.
+   */
+  async runSlash(command: string): Promise<void> {
+    const sid = await this.ensureSession();
+    const gw = this.client;
+    if (!gw) throw new Error("gateway not connected");
+    await executeSlash({
+      command,
+      sessionId: sid,
+      gw,
+      callbacks: {
+        sys: (text) => updateSession(sid, (state) => appendSystemMessage(state, text)),
+        send: (text) => void this.submit(text).catch(() => {}),
+      },
+    });
   }
 
   async interrupt(): Promise<void> {

@@ -348,6 +348,16 @@ export function appendUserMessage(state: SessionChatState, text: string): Sessio
   };
 }
 
+/** A local system line (slash-command output, notices). */
+export function appendSystemMessage(state: SessionChatState, text: string): SessionChatState {
+  const id = `${state.sessionId}-s${state.nextId}`;
+  return {
+    ...state,
+    nextId: state.nextId + 1,
+    messages: [...state.messages, { id, role: "system", parts: [{ type: "text", text }], timestamp: nowSeconds() }],
+  };
+}
+
 /** Local Stop: seal the stream now; the backend confirms via session.info. */
 export function markInterrupted(state: SessionChatState): SessionChatState {
   return clearInputRequests(settlePending(state, "interrupted"));

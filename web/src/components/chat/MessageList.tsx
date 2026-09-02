@@ -106,9 +106,17 @@ function MessageRow({ message }: { message: ChatMessage }) {
     );
   }
   if (message.role === "system") {
+    const text = message.parts.map((p) => (p.type === "text" ? p.text : "")).join("");
+    // One-liners (notices) centre; slash-command output is a block.
+    const block = text.includes("\n") || text.length > 120;
     return (
-      <div className="text-center text-xs opacity-60 whitespace-pre-wrap break-words px-4">
-        {message.parts.map((p, i) => (p.type === "text" ? <span key={i}>{p.text}</span> : null))}
+      <div
+        className={cn(
+          "whitespace-pre-wrap break-words px-2 text-xs opacity-70",
+          block ? "rounded border border-border/60 bg-foreground/5 p-2 text-left font-mono" : "text-center",
+        )}
+      >
+        {text}
       </div>
     );
   }
