@@ -6,10 +6,11 @@ gateway's CORS and WebSocket-Origin guards refuse the WebView origin
 (verified in [`spikes/m0`](spikes/m0/README.md)). The agent itself runs
 elsewhere: point the app at any `hermes serve` bound to a reachable address.
 
-Status: **M6 — connection UX.** QR pairing from the dashboard's "Mobile app"
-page (address only, never a credential), an in-app scanner, and a
-multi-gateway registry with per-gateway sessions in the encrypted store —
-on top of M3 chat, M4 polish, and M5 notifications.
+Status: **M7 — release hardening.** Origin policy (public plain-http needs
+an explicit acknowledgement; loopback refused), backups disabled, foreground
+service timeout handled, release signing from the environment with R8
+shrinking and keep rules. See [RELEASE.md](RELEASE.md) for the build recipe,
+permission rationale, and the foreground-service justification.
 
 ## Layout
 
@@ -183,6 +184,10 @@ can authenticate to it.
   replayed via `approval.pending`, and Deny was applied (the directory
   survived, the tool reported "Command denied").
 
+- M7 on the Pixel 8 Pro: a signed, R8-shrunk release build (2.8 MB vs 10.4 MB
+  debug) signed in through the Custom Tab, connected, and ran a tool turn.
+  The first release build crashed in the permission lookup because R8 had
+  stripped the plugin annotation — now kept, and the lookup fails soft.
 - M6 on the Pixel 8 Pro: the M2-format session migrated into the
   per-gateway store and signed in unchanged; Saved gateways lists it as
   current; Scan QR brokered the camera permission and opened a live preview.

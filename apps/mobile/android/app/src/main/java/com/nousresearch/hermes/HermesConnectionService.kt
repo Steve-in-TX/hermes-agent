@@ -25,6 +25,14 @@ import androidx.core.app.ServiceCompat
 class HermesConnectionService : Service() {
     override fun onBind(intent: Intent?): IBinder? = null
 
+    /**
+     * Android 15+: dataSync services get at most 6 h per 24 h. Stop cleanly;
+     * the plugin starts the service again on the next connect / foreground.
+     */
+    override fun onTimeout(startId: Int, fgsType: Int) {
+        stopSelf()
+    }
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val label = intent?.getStringExtra(EXTRA_LABEL)?.takeIf { it.isNotBlank() } ?: "gateway"
         val notification = buildNotification(label)

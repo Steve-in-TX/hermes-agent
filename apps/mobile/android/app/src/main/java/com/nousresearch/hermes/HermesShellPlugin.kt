@@ -71,16 +71,25 @@ class HermesShellPlugin : Plugin() {
 
     @PluginMethod
     fun requestNotificationPermission(call: PluginCall) {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || getPermissionState("notifications") == PermissionState.GRANTED) {
-            call.resolve(JSObject().put("granted", NotificationManagerCompat.from(context).areNotificationsEnabled()))
+        val enabled = NotificationManagerCompat.from(context).areNotificationsEnabled()
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU || enabled) {
+            call.resolve(JSObject().put("granted", enabled))
             return
         }
-        requestPermissionForAlias("notifications", call, "notificationPermissionCallback")
+        // A permission-state lookup must never take the app down; without the
+        // prompt the app still works, just without background notifications.
+        try {
+            requestPermissionForAlias("notifications", call, "notificationPermissionCallback")
+        } catch (e: Exception) {
+            call.resolve(JSObject().put("granted", false))
+        }
     }
 
     @PermissionCallback
     fun notificationPermissionCallback(call: PluginCall) {
-        call.resolve(JSObject().put("granted", getPermissionState("notifications") == PermissionState.GRANTED))
+        val granted = runCatching { getPermissionState("notifications") == PermissionState.GRANTED }
+            .getOrDefault(NotificationManagerCompat.from(context).areNotificationsEnabled())
+        call.resolve(JSObject().put("granted", granted))
     }
 
     // ── foreground service ──────────────────────────────────────────

@@ -17,7 +17,8 @@ import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/c
 import { decodePairingPayload } from "@hermes/shared";
 
 import { QrScanner, canScanQr } from "@/components/QrScanner";
-import { isCleartextOrigin, normalizeGatewayUrl } from "@/lib/backend-target";
+import { normalizeGatewayUrl } from "@/lib/backend-target";
+import { classifyOrigin, originCaveat, type OriginClass } from "@/lib/origin-policy";
 import {
   probeGatewayStatus,
   verifyGatewayBearer,
@@ -95,13 +96,18 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
     };
   }, [connection, gatewaysNonce]);
 
-  const cleartext = (() => {
+  const [ackPublicHttp, setAckPublicHttp] = useState(false);
+  const originClass: OriginClass | null = (() => {
     try {
-      return isCleartextOrigin(normalizeGatewayUrl(url).origin);
+      return classifyOrigin(normalizeGatewayUrl(url).origin);
     } catch {
-      return false;
+      return null;
     }
   })();
+  const caveat = originCaveat(originClass);
+  // Public plain-http needs the acknowledgement; loopback can never sign in.
+  const blocked = originClass === "loopback" || (originClass === "public-http" && !ackPublicHttp);
+  useEffect(() => setAckPublicHttp(false), [url]);
 
   const handleProbe = async () => {
     setError(null);
@@ -256,10 +262,16 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
             />
           </label>
 
-          {cleartext && (
-            <div className="text-xs text-amber-600 dark:text-amber-400">
-              Plain http: the sign-in browser may show a security warning, and the token travels unencrypted. Prefer https for gateways reached over the internet.
+          {caveat && (
+            <div className={originClass === "public-http" ? "text-xs text-red-600 dark:text-red-400" : "text-xs text-amber-600 dark:text-amber-400"}>
+              {caveat}
             </div>
+          )}
+          {originClass === "public-http" && (
+            <label className="flex min-h-12 items-center gap-2 text-sm">
+              <input type="checkbox" className="size-5" checked={ackPublicHttp} onChange={(e) => setAckPublicHttp(e.target.checked)} />
+              I understand this gateway is reached over plain http.
+            </label>
           )}
           {probe && <div className="text-sm text-green-600 dark:text-green-400">{probe}</div>}
           {error && (
@@ -277,7 +289,7 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
             <Button onClick={() => void handleProbe()} disabled={busy !== null}>
               {busy === "probe" ? "Testing…" : "Test connection"}
             </Button>
-            <Button onClick={() => void handleSignIn()} disabled={busy !== null || !nativeAvailable}>
+            <Button onClick={() => void handleSignIn()} disabled={busy !== null || !nativeAvailable || blocked}>
               {busy === "signin" ? "Waiting for browser…" : "Sign in"}
             </Button>
             {connection && (
@@ -314,7 +326,7 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
                 />
               </label>
               <div>
-                <Button onClick={() => void handleToken()} disabled={busy !== null}>
+                <Button onClick={() => void handleToken()} disabled={busy !== null || blocked}>
                   {busy === "token" ? "Connecting…" : "Connect with token"}
                 </Button>
               </div>
