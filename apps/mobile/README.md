@@ -6,9 +6,9 @@ gateway's CORS and WebSocket-Origin guards refuse the WebView origin
 (verified in [`spikes/m0`](spikes/m0/README.md)). The agent itself runs
 elsewhere: point the app at any `hermes serve` bound to a reachable address.
 
-Status: **M2 — real sign-in.** RFC 8252 login in the system browser (Custom
-Tabs + PKCE), tokens in an encrypted store, proactive refresh. Sessions page
-(REST-only). No chat yet (M3).
+Status: **M3 core — structured chat.** Streaming replies, tool cards,
+approvals, clarify questions, sudo/secret prompts, reconnect with pending
+approval replay. Sign-in (M2) and the Sessions page are unchanged.
 
 ## Layout
 
@@ -24,6 +24,9 @@ apps/mobile/
 │       ├── HermesAuthPlugin.kt     RFC 8252 login, refresh, session store API
 │       └── MainActivity.java       registers the plugins
 ├── scripts/mint-token.sh      mint a bearer for the "paste a token" fallback
+├── testing/
+│   ├── mock-inference.mjs     OpenAI-compatible mock model with M3_* scenarios
+│   └── rig.sh                 real hermes serve + mock model + manual approvals
 ├── spikes/m0/                 transport assumptions, proven
 └── www/                       gitignored; built from web/ with HERMES_TARGET=mobile
 ```
@@ -31,43 +34,41 @@ apps/mobile/
 The TypeScript half lives in `web/`, selected at runtime, so the dashboard and
 the app share one bundle, one typecheck, one test suite:
 
-- `web/src/lib/backend-target.ts` — origin + base path + bearer + refresh
-  hook; the default is byte-identical to the browser dashboard.
-- `web/src/lib/transport/` — `HttpDriver` and `SocketFactory` seams;
-  `capacitor.ts` implements both on the native plugins and is dead code in the
-  browser build.
-- `web/src/lib/native-auth.ts` — the `NativeAuthBridge` contract;
-  `native-auth-capacitor.ts` binds it to the `HermesAuth` plugin.
-- `web/src/lib/mobile-connection.ts` — active session, proactive refresh
-  120s before expiry, single-flighted refresh on 401, wipe only on the
-  gateway's terminal `session_expired`.
-- `web/src/pages/ConnectionPage.tsx` — URL, test, **Sign in**, and an
-  advanced "paste a token" fallback.
+- `web/src/lib/backend-target.ts`, `web/src/lib/transport/` — remote origin,
+  bearer, refresh hook, and the native HTTP/socket drivers (M1).
+- `web/src/lib/native-auth*.ts`, `web/src/lib/mobile-connection.ts` — sign-in
+  bridge, session store, proactive refresh (M2).
+- `apps/shared/src/chat-input-requests.ts` — pure parser for
+  `approval.request` / `clarify.request` / `sudo.request` / `secret.request`
+  and expiries, with the gateway's choice derivation. Shared so desktop and
+  mobile cannot drift.
+- `web/src/lib/chat/` — `types.ts` (message model), `reducer.ts` (pure event →
+  state), `hydrate.ts` (`session.history` rows → messages), `store.ts`
+  (per-session external store), `controller.ts` (socket lifecycle, sessions,
+  submit/interrupt, the four responds, reconnect + `approval.pending` replay).
+- `web/src/components/chat/` — `MessageList`, `InputRequestCards`
+  (ApprovalCard, ClarifyCard), `SecretPrompts` (sudo/secret bottom sheets),
+  `Composer`; `web/src/pages/GatewayChatPage.tsx` ties them together.
 
-## Sign-in flow
+## Chat protocol notes (verified live)
 
-1. The app probes public `/api/status`. `auth_flows` must contain
-   `native_pkce`; if it also contains `native_app_scheme` the app asks for a
-   redirect to `com.nousresearch.hermes:/oauth2redirect` (intent filter),
-   otherwise it opens a loopback listener on `127.0.0.1:<random>`.
-2. `HermesAuthPlugin.login` generates PKCE + `state` natively and opens
-   `<gateway>/auth/native/authorize?…` in a Chrome Custom Tab. Password
-   providers land on the gateway's `/login` form (OS password managers can
-   autofill there); OAuth providers go through their IDP.
-3. The gateway redirects the browser with `?code=&state=`. The plugin checks
-   `state`, POSTs `/auth/native/token` with the verifier, and stores
-   `{access, refresh, expires_at, user, provider, origin}` in
-   `EncryptedSharedPreferences`. JS receives the access token only.
-4. `fetchJSON` sends `Authorization: Bearer`. On a 401 it asks the bridge to
-   refresh once and retries; `POST /auth/native/refresh` answering 401
-   `session_expired` wipes the store and returns the app to the connection
-   screen, while 503 or a network failure keeps the session.
-
-The backend side of the scheme redirect is `_validate_native_redirect_uri`
-in `hermes_cli/dashboard_auth/routes.py` (loopback branch unchanged; the
-private-use scheme must be exactly `com.nousresearch.hermes:/oauth2redirect`)
-and the `native_app_scheme` entry in `/api/status` `auth_flows`. Gateways
-without it still work through the loopback listener.
+- One socket per app lifetime. `session.create {source:"android",
+  close_on_disconnect:false}` lazily on the first message; `prompt.submit`
+  answers `{status:"streaming"}` and the turn arrives as `message.start` →
+  `message.delta`* → (`message.interim`, `tool.start`, `tool.complete`)* →
+  `message.complete`.
+- **After a socket drop, resume by the STORED session id.** `session.resume`
+  with the detached runtime id answers `4007 session not found`; the stored
+  id reattaches the same runtime with `running`, `inflight`, and the pending
+  approval, and completion events flow to the new socket. The controller does
+  this on every reconnect and then calls `approval.pending`.
+- `approval.request` is acked with `approval.received`; `choices` are rendered
+  verbatim (`once|session|always|deny`, narrowed by the gateway for Tirith
+  warnings and smart denials). "Always allow" needs a second tap.
+- Batch clarify answers are sent one `clarify.respond` per question,
+  sequentially; the last lock resolves the tool.
+- Sudo/secret sheets: every dismissal sends an empty answer (close is
+  refusal); the backend runs nothing for an empty sudo password.
 
 ## Build
 
@@ -96,13 +97,18 @@ Individually: `npm run build:web`, `npm run sync`, `npm run apk`, or
      hermes serve --host 0.0.0.0 --port 9119
    ```
 
+   Or, without a real model, the rig: `apps/mobile/testing/rig.sh 0.0.0.0 9137`
+   (user `spike`, password `m0-spike-password`, approvals set to manual). Type
+   `M3_TOOL`, `M3_APPROVAL`, `M3_CLARIFY`, or `M3_SLOW` in a message to
+   trigger each scenario.
+
 2. In the app: enter the gateway URL, tap **Test connection**, then **Sign
    in**. The system browser opens the gateway's login form; after signing in
-   it bounces back to the app and the Sessions page loads over the native
-   transport.
+   it bounces back to the app and the Chat tab opens.
 
 3. Fallback without a browser: `scripts/mint-token.sh <url> me 'choose-one'`
-   prints an access token for **Advanced: paste an access token**.
+   prints an access token for **Advanced: paste an access token** on the
+   Connection tab.
 
 Plain `http://` gateways work: `network_security_config.xml` permits cleartext
 for now (release hardening narrows this). A gateway bound to loopback behind a
@@ -112,19 +118,29 @@ can authenticate to it.
 ## Verification status
 
 - Web: typecheck, lint, and the vitest suite cover the seam, the transport,
-  the auth bridge, refresh semantics, and the 401 retry. An opt-in live test
-  (`HERMES_LIVE_GATEWAY`/`HERMES_LIVE_TOKEN`) drives the real `api.ts` path
-  against a running gateway.
+  the auth bridge, refresh semantics, the 401 retry, the chat reducer
+  (against event sequences captured from a real gateway), history hydration,
+  the shared input-request parser (every `_approval_request_payload`
+  variant), and the controller (fake gateway: lazy create, approval ack,
+  resume + replay, reconnect backoff, interrupt, sequential batch clarify).
+- Live, opt-in (`HERMES_LIVE_GATEWAY`/`HERMES_LIVE_TOKEN` against the rig):
+  `remote-target.live.test.ts` (M1 seam) and `chat/chat.live.test.ts` — plain
+  reply, real tool turn, approval answered from the client and the agent
+  proceeds, **socket killed mid-approval → reconnect → approval replayed →
+  deny applied**, clarify answered, resume with the transcript intact. All
+  green as of 2026-09-02.
 - Backend: `tests/hermes_cli/test_dashboard_auth_native_flow.py` covers the
   scheme redirect end to end and the rejection table.
-- Android, verified on a Pixel 8 Pro (Android 17, Vanadium browser) against a
-  gateway on the LAN: native REST probe, Custom Tab sign-in to the password
-  form, redirect back through the `com.nousresearch.hermes:/oauth2redirect`
-  intent filter, token exchange, Sessions page over the native transport, and
-  the session restored from the encrypted store after `am force-stop`.
-  Not yet exercised on a device: the loopback-listener redirect (only used
-  against gateways without `native_app_scheme`), token refresh at expiry, and
-  any WebSocket (nothing on the Sessions page opens one; M3 will).
+- Android, verified on a Pixel 8 Pro (Android 17, Vanadium browser): native
+  REST probe, Custom Tab sign-in, scheme-redirect back into the app, token
+  exchange, Sessions page over the native transport, session restored after
+  `am force-stop`. **Chat on the phone (2026-09-02):** native WebSocket with
+  the ticket subprotocol, a streamed tool turn rendered with the tool card,
+  a dangerous-command approval tripped and approved from the phone with the
+  agent proceeding (the directory was deleted), then Wi-Fi cut mid-approval,
+  the app reconnected (after the cellular timeout), the approval card was
+  replayed via `approval.pending`, and Deny was applied (the directory
+  survived, the tool reported "Command denied").
 
 Device findings to carry forward:
 
@@ -136,9 +152,18 @@ Device findings to carry forward:
 - The dashboard header overlaps the status bar: no top safe-area inset yet
   (the M4 `useSafeAreaInsets` item).
 
-## Notes for M3+
+## Not in M3 core (next)
 
-- `/api/ws` closes before the upgrade on both auth and origin failures, so the
-  client sees HTTP 403 either way; diagnose with a REST probe first.
-- The mobile bundle never mounts the xterm chat page and disables the
-  dashboard plugin slot system (same-origin assumptions).
+- Slash commands (`SlashPopover` + `slashExec` exist in web/ and only need a
+  live `GatewayClient`), image/file attachments (`image.attach_bytes`), model
+  picker on the chat page, message reactions.
+- Moving the desktop's `lib/chat-messages` (tool-part projection, timeline
+  reconciliation) into `apps/shared` so both clients share one message model;
+  today mobile has its own minimal reducer.
+- After a reconnect the transcript is rebuilt from history, so a tool that was
+  running when the socket dropped has no card until its `tool.complete`
+  arrives (history carries no tool row until then). Reusing the shared
+  client's seq watermarks across reconnects would replay `tool.start` too.
+- A reconnect while the phone falls back to cellular first waits out OkHttp's
+  15 s connect timeout to the LAN address; a `ConnectivityManager` callback
+  (M5) should trigger `reconnectNow()` the moment Wi-Fi returns.

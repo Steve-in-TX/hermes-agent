@@ -112,3 +112,21 @@ export {
   type ResolveGatewayWsUrlDeps,
   type WebSocketAuthParam
 } from './websocket-url'
+export {
+  APPROVAL_CHOICES,
+  approvalChoicesFromPayload,
+  bareChoice,
+  normalizeChoices,
+  normalizeQuestions,
+  parseInputRequest,
+  readClarifyResult,
+  RECOMMENDED_LABEL,
+  type ApprovalChoice,
+  type ApprovalRequest,
+  type ClarifyQuestion,
+  type ClarifyRequest,
+  type InputRequest,
+  type InputRequestExpiry,
+  type SecretRequest,
+  type SudoRequest
+} from './chat-input-requests'

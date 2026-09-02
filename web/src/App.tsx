@@ -99,6 +99,7 @@ const WebhooksPage = lazy(() => import("@/pages/WebhooksPage"));
 const SystemPage = lazy(() => import("@/pages/SystemPage"));
 const ChatPage = lazy(() => import("@/pages/ChatPage"));
 const ConnectionPage = lazy(() => import("@/pages/ConnectionPage"));
+const GatewayChatPage = lazy(() => import("@/pages/GatewayChatPage"));
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { useI18n } from "@/i18n";
@@ -237,13 +238,19 @@ const CONNECTION_NAV_ITEM: NavItem = {
   icon: Wifi,
 };
 
+function MobileRootRedirect() {
+  return <Navigate to="/chat" replace />;
+}
+
 const MOBILE_ROUTES: Record<string, ComponentType> = {
-  "/": RootRedirect,
+  "/": MobileRootRedirect,
+  "/chat": GatewayChatPage,
   "/sessions": SessionsPage,
   "/connect": ConnectionPage,
 };
 
 const MOBILE_NAV: NavItem[] = [
+  { path: "/chat", labelKey: "chat", label: "Chat", icon: MessageSquare },
   ...BUILTIN_NAV_REST.filter((item) => item.path === "/sessions"),
   CONNECTION_NAV_ITEM,
 ];
