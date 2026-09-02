@@ -23,6 +23,17 @@
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
 
+            <!-- RFC 8252 §7.1 private-use redirect: the gateway sends the
+                 system browser to com.nousresearch.hermes:/oauth2redirect?code=…
+                 when it advertises native_app_scheme. Without a host, Android
+                 ignores path filters, so HermesAuthPlugin checks the path. -->
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="com.nousresearch.hermes" />
+            </intent-filter>
+
         </activity>
 
         <provider

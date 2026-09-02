@@ -208,6 +208,86 @@ def test_native_authorize_rejects_non_loopback_redirect(gated_client):
 
 
 # ---------------------------------------------------------------------------
+# RFC 8252 §7.1 private-use scheme (the Android app's intent filter)
+# ---------------------------------------------------------------------------
+
+
+APP_SCHEME_REDIRECT = "com.nousresearch.hermes:/oauth2redirect"
+
+
+def test_native_authorize_accepts_registered_app_scheme_redirect(gated_client):
+    _verifier, challenge = _make_pkce()
+    r = gated_client.get(
+        "/auth/native/authorize",
+        params=_native_authorize_params(
+            challenge, provider="stub", redirect_uri=APP_SCHEME_REDIRECT
+        ),
+        follow_redirects=False,
+    )
+    assert r.status_code == 302, r.text
+
+
+def test_native_callback_redirects_to_app_scheme_with_code(gated_client):
+    verifier, challenge = _make_pkce()
+    r = gated_client.get(
+        "/auth/native/authorize",
+        params=_native_authorize_params(
+            challenge, provider="stub", redirect_uri=APP_SCHEME_REDIRECT,
+            state="app-state",
+        ),
+        follow_redirects=False,
+    )
+    assert r.status_code == 302
+    upstream = urlparse(r.headers["location"])
+    upstream_state = parse_qs(upstream.query)["state"][0]
+    cb = gated_client.get(
+        "/auth/callback",
+        params={"code": "stub_code", "state": upstream_state},
+        follow_redirects=False,
+    )
+    assert cb.status_code == 302, cb.text
+    loc = cb.headers["location"]
+    assert loc.startswith(APP_SCHEME_REDIRECT + "?"), loc
+    q = parse_qs(urlparse(loc).query)
+    assert q["state"] == ["app-state"]
+    tok = gated_client.post(
+        "/auth/native/token",
+        json={"code": q["code"][0], "code_verifier": verifier},
+    )
+    assert tok.status_code == 200, tok.text
+    assert tok.json()["access_token"]
+    assert "set-cookie" not in {k.lower() for k in tok.headers}
+
+
+@pytest.mark.parametrize(
+    "bad",
+    [
+        "hermes://x",                                   # unqualified scheme
+        "com.nousresearch.hermes://evil/oauth2redirect", # authority present
+        "com.nousresearch.hermes:/other",               # wrong path
+        "com.nousresearch.hermes:/oauth2redirect/extra",
+        "com.evil.app:/oauth2redirect",                 # unlisted scheme
+        "http://localhost:53999/cb",                    # §8.3: name, not literal
+        "https://127.0.0.1:53999/cb",                   # loopback must be http
+    ],
+)
+def test_native_authorize_rejects_unsafe_native_redirects(gated_client, bad):
+    _verifier, challenge = _make_pkce()
+    r = gated_client.get(
+        "/auth/native/authorize",
+        params=_native_authorize_params(challenge, provider="stub", redirect_uri=bad),
+        follow_redirects=False,
+    )
+    assert r.status_code == 400, (bad, r.text)
+
+
+def test_status_advertises_native_app_scheme(pw_gated_client):
+    body = pw_gated_client.get("/api/status").json()
+    assert "native_pkce" in body["auth_flows"]
+    assert "native_app_scheme" in body["auth_flows"]
+
+
+# ---------------------------------------------------------------------------
 # Empty-provider auto-select (the desktop omits ``provider``; the gateway
 # picks when there is exactly one brokerable candidate) — regression #78906
 # ---------------------------------------------------------------------------

@@ -9,6 +9,7 @@ import { ThemeProvider } from "./themes";
 import { HERMES_BASE_PATH } from "./lib/api";
 import { isMobileTarget } from "./lib/hermes-target";
 import { bootstrapMobileConnection } from "./lib/mobile-connection";
+import { installNativeAuthIfAvailable } from "./lib/native-auth-capacitor";
 import { installNativeTransportIfAvailable } from "./lib/transport";
 
 async function boot(): Promise<void> {
@@ -16,7 +17,8 @@ async function boot(): Promise<void> {
     // Android shell: swap fetch/WebSocket for the native OkHttp plugins and
     // restore the saved gateway connection before anything can request.
     await installNativeTransportIfAvailable();
-    bootstrapMobileConnection();
+    await installNativeAuthIfAvailable();
+    await bootstrapMobileConnection();
   }
 
   // Expose the plugin SDK before rendering so plugins loaded via <script>

@@ -42,6 +42,9 @@ dependencies {
     implementation project(':capacitor-android')
     // Native transport for the dashboard bundle (HermesHttp / HermesSocket).
     implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    // HermesAuth: system browser (Custom Tabs) + encrypted token store.
+    implementation 'androidx.browser:browser:1.8.0'
+    implementation 'androidx.security:security-crypto:1.1.0'
     testImplementation "junit:junit:$junitVersion"
     androidTestImplementation "androidx.test.ext:junit:$androidxJunitVersion"
     androidTestImplementation "androidx.test.espresso:espresso-core:$androidxEspressoCoreVersion"

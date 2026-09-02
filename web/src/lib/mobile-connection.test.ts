@@ -1,95 +1,199 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { REAUTH_EVENT, isRemoteTarget, resolveUrl, getBackendTarget } from "./backend-target";
+import { REAUTH_EVENT, getBackendTarget, isRemoteTarget, resolveUrl } from "./backend-target";
 import {
   CONNECTION_STORAGE_KEY,
-  applyConnection,
+  applySession,
   bootstrapMobileConnection,
-  clearSavedConnection,
-  connectTo,
+  connectWithToken,
   disconnect,
+  getAccessToken,
   getCurrentConnection,
-  loadSavedConnection,
-  saveConnection,
+  loadSavedSession,
+  refreshSession,
+  signIn,
 } from "./mobile-connection";
+import {
+  NativeAuthError,
+  setNativeAuthBridge,
+  type NativeAuthBridge,
+  type NativeSession,
+} from "./native-auth";
 
-function memoryStorage(initial: Record<string, string> = {}) {
-  const map = new Map(Object.entries(initial));
-  return {
-    getItem: (k: string) => map.get(k) ?? null,
-    setItem: (k: string, v: string) => void map.set(k, v),
-    removeItem: (k: string) => void map.delete(k),
-    dump: () => Object.fromEntries(map),
-  };
-}
-
-const CONN = {
+const SESSION: NativeSession = {
   origin: "https://gw.example:9119",
   basePath: "/hermes",
-  token: "tok-1",
+  accessToken: "tok-1",
+  expiresAt: Math.floor(Date.now() / 1000) + 3600,
   userId: "steve",
   provider: "basic",
 };
 
-afterEach(() => {
-  disconnect();
+function fakeBridge(overrides: Partial<NativeAuthBridge> = {}): NativeAuthBridge {
+  let stored: NativeSession | null = null;
+  return {
+    available: true,
+    getSession: vi.fn(async () => stored),
+    login: vi.fn(async () => {
+      stored = SESSION;
+      return SESSION;
+    }),
+    refresh: vi.fn(async () => {
+      stored = { ...SESSION, accessToken: "tok-2" };
+      return stored;
+    }),
+    setSession: vi.fn(async (s) => {
+      stored = s;
+      return s;
+    }),
+    logout: vi.fn(async () => {
+      stored = null;
+    }),
+    ...overrides,
+  };
+}
+
+beforeEach(() => {
+  vi.useFakeTimers();
+});
+
+afterEach(async () => {
+  await disconnect();
+  setNativeAuthBridge(null);
   window.localStorage.clear();
+  vi.useRealTimers();
 });
 
-describe("saved connection storage", () => {
-  it("round-trips through storage", () => {
-    const store = memoryStorage();
-    saveConnection(CONN, store);
-    expect(loadSavedConnection(store)).toEqual(CONN);
-    clearSavedConnection(store);
-    expect(loadSavedConnection(store)).toBeNull();
-  });
-
-  it.each([
-    ["garbage", "not json"],
-    ["missing token", JSON.stringify({ origin: "https://x" })],
-    ["empty origin", JSON.stringify({ origin: "", token: "t" })],
-    ["wrong types", JSON.stringify({ origin: 1, token: 2 })],
-  ])("ignores %s", (_label, raw) => {
-    expect(loadSavedConnection(memoryStorage({ [CONNECTION_STORAGE_KEY]: raw }))).toBeNull();
-  });
-});
-
-describe("applying a connection", () => {
-  it("points the backend target at the gateway with the bearer", () => {
-    applyConnection(CONN);
+describe("without a native bridge (browser dev)", () => {
+  it("connectWithToken persists to localStorage and points the target at the gateway", async () => {
+    await connectWithToken(SESSION);
     expect(isRemoteTarget()).toBe(true);
     expect(resolveUrl("/api/status")).toBe("https://gw.example:9119/hermes/api/status");
     expect(getBackendTarget().bearer()).toBe("tok-1");
-    expect(getCurrentConnection()).toEqual(CONN);
+    expect(loadSavedSession()).toEqual(SESSION);
+    expect(getCurrentConnection()).toMatchObject({ origin: SESSION.origin, userId: "steve" });
   });
 
-  it("connectTo persists and disconnect wipes", () => {
-    connectTo(CONN);
-    expect(loadSavedConnection()).toEqual(CONN);
-    disconnect();
-    expect(loadSavedConnection()).toBeNull();
-    expect(isRemoteTarget()).toBe(false);
-    expect(getCurrentConnection()).toBeNull();
-  });
-});
-
-describe("bootstrapMobileConnection", () => {
-  it("restores the saved connection and drops it on a reauth event", () => {
-    saveConnection(CONN);
-    expect(bootstrapMobileConnection()).toEqual(CONN);
+  it("bootstrap restores the saved session and a reauth event disconnects", async () => {
+    window.localStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(SESSION));
+    await expect(bootstrapMobileConnection()).resolves.toMatchObject({ origin: SESSION.origin });
     expect(isRemoteTarget()).toBe(true);
 
     window.dispatchEvent(new CustomEvent(REAUTH_EVENT, { detail: { reason: "unauthorized" } }));
+    await vi.runAllTimersAsync();
 
     expect(getCurrentConnection()).toBeNull();
+    expect(loadSavedSession()).toBeNull();
     expect(isRemoteTarget()).toBe(false);
-    expect(loadSavedConnection()).toBeNull();
   });
 
-  it("returns null with nothing saved", () => {
-    expect(bootstrapMobileConnection()).toBeNull();
+  it("signIn fails clearly and refresh reports false", async () => {
+    await expect(
+      signIn({ origin: SESSION.origin, basePath: "", redirectMode: "loopback" }),
+    ).rejects.toBeInstanceOf(NativeAuthError);
+    await expect(refreshSession()).resolves.toBe(false);
+  });
+
+  it("ignores malformed saved sessions", () => {
+    window.localStorage.setItem(CONNECTION_STORAGE_KEY, JSON.stringify({ origin: "x" }));
+    expect(loadSavedSession()).toBeNull();
+  });
+});
+
+describe("with the native bridge", () => {
+  it("bootstrap reads the session from the bridge, never localStorage", async () => {
+    const bridge = fakeBridge({ getSession: vi.fn(async () => SESSION) });
+    setNativeAuthBridge(bridge);
+    await bootstrapMobileConnection();
+    expect(bridge.getSession).toHaveBeenCalledTimes(1);
+    expect(getBackendTarget().bearer()).toBe("tok-1");
+    expect(window.localStorage.getItem(CONNECTION_STORAGE_KEY)).toBeNull();
+  });
+
+  it("signIn runs the native login and applies the session with a refresh hook", async () => {
+    const bridge = fakeBridge();
+    setNativeAuthBridge(bridge);
+    await signIn({ origin: SESSION.origin, basePath: "/hermes", redirectMode: "scheme" });
+    expect(bridge.login).toHaveBeenCalledWith({
+      origin: SESSION.origin,
+      basePath: "/hermes",
+      redirectMode: "scheme",
+    });
+    expect(getBackendTarget().bearer()).toBe("tok-1");
+    expect(typeof getBackendTarget().refresh).toBe("function");
+  });
+
+  it("refresh is single-flighted and swaps the bearer", async () => {
+    const bridge = fakeBridge();
+    setNativeAuthBridge(bridge);
+    applySession(SESSION);
+    const [a, b] = await Promise.all([refreshSession(), refreshSession()]);
+    expect(a).toBe(true);
+    expect(b).toBe(true);
+    expect(bridge.refresh).toHaveBeenCalledTimes(1);
+    expect(getAccessToken()).toBe("tok-2");
+  });
+
+  it("session_expired wipes the connection; unavailable keeps it", async () => {
+    const expired = fakeBridge({
+      refresh: vi.fn(async () => {
+        throw new NativeAuthError("session_expired", "gone");
+      }),
+    });
+    setNativeAuthBridge(expired);
+    applySession(SESSION);
+    await expect(refreshSession()).resolves.toBe(false);
+    expect(getCurrentConnection()).toBeNull();
     expect(isRemoteTarget()).toBe(false);
+
+    const outage = fakeBridge({
+      refresh: vi.fn(async () => {
+        throw new NativeAuthError("unavailable", "idp down");
+      }),
+    });
+    setNativeAuthBridge(outage);
+    applySession(SESSION);
+    await expect(refreshSession()).resolves.toBe(false);
+    expect(getCurrentConnection()).not.toBeNull();
+    expect(getBackendTarget().bearer()).toBe("tok-1");
+  });
+
+  it("refreshes proactively 120s before expiry", async () => {
+    const bridge = fakeBridge();
+    setNativeAuthBridge(bridge);
+    const now = Math.floor(Date.now() / 1000);
+    applySession({ ...SESSION, expiresAt: now + 600 });
+    await vi.advanceTimersByTimeAsync(479_000);
+    expect(bridge.refresh).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2_000);
+    expect(bridge.refresh).toHaveBeenCalledTimes(1);
+    expect(getAccessToken()).toBe("tok-2");
+  });
+
+  it("disconnect clears the native store", async () => {
+    const bridge = fakeBridge();
+    setNativeAuthBridge(bridge);
+    applySession(SESSION);
+    await disconnect();
+    expect(bridge.logout).toHaveBeenCalledTimes(1);
+    expect(getCurrentConnection()).toBeNull();
+  });
+
+  it("a reauth event after a failed retry tries one refresh and keeps the session on outage", async () => {
+    const outage = fakeBridge({
+      getSession: vi.fn(async () => SESSION),
+      refresh: vi.fn(async () => {
+        throw new NativeAuthError("unavailable", "idp down");
+      }),
+    });
+    setNativeAuthBridge(outage);
+    await bootstrapMobileConnection();
+    window.dispatchEvent(new CustomEvent(REAUTH_EVENT, { detail: { reason: "unauthorized" } }));
+    // Flush the listener only — running all timers would also fire the
+    // proactive refresh scheduled for 120s before expiry.
+    await vi.advanceTimersByTimeAsync(10);
+    expect(outage.refresh).toHaveBeenCalledTimes(1);
+    expect(getCurrentConnection()).not.toBeNull();
   });
 });

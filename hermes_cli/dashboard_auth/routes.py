@@ -269,29 +269,59 @@ async def auth_login(request: Request, provider: str, next: str = ""):
 # ---------------------------------------------------------------------------
 
 
-def _validate_loopback_redirect_uri(raw: str) -> str:
-    """Return ``raw`` if it is a safe loopback redirect_uri, else raise.
+# RFC 8252 §7.1 private-use URI schemes the gateway will redirect a native
+# login to. Each MUST be the reverse-DNS form of a domain the app publisher
+# controls (``com.nousresearch.hermes``), never a generic word like
+# ``hermes://`` — any app on the device can claim an unqualified scheme, which
+# would turn ``/auth/callback`` into an open redirect of live auth codes. The
+# path is fixed so there is nothing for an attacker to tune.
+NATIVE_APP_REDIRECT_SCHEMES: frozenset[str] = frozenset({"com.nousresearch.hermes"})
+NATIVE_APP_REDIRECT_PATH = "/oauth2redirect"
 
-    RFC 8252 §7.3 restricts native-app redirects to the loopback interface.
-    We accept only ``http://127.0.0.1[:port]/...`` and ``http://[::1][:port]/...``
-    — literal loopback IPs. ``localhost`` is deliberately NOT accepted
-    (RFC 8252 §8.3: the name can resolve to a non-loopback address via the
-    hosts file or a hostile resolver, so clients "SHOULD use loopback IP
-    literals"; the desktop always sends ``127.0.0.1``).
-    A non-loopback host would let an attacker who can reach ``/auth/native/
-    authorize`` (a public route) turn the gateway's authenticated callback
-    into an open redirect that leaks a live authorization code to an
-    arbitrary origin — so this check is a security boundary, not ergonomics.
+
+def _validate_native_redirect_uri(raw: str) -> str:
+    """Return ``raw`` if it is a safe native-app redirect_uri, else raise.
+
+    Two shapes are accepted, both from RFC 8252:
+
+    * §7.3 loopback: ``http://127.0.0.1[:port]/...`` or ``http://[::1][:port]/...``
+      — literal loopback IPs only. ``localhost`` is deliberately NOT accepted
+      (§8.3: the name can resolve to a non-loopback address via the hosts file
+      or a hostile resolver, so clients "SHOULD use loopback IP literals"; the
+      desktop always sends ``127.0.0.1``).
+    * §7.1 private-use scheme: ``com.nousresearch.hermes:/oauth2redirect`` —
+      exactly one of :data:`NATIVE_APP_REDIRECT_SCHEMES`, no authority, the
+      fixed path. This is what the Android app registers an intent filter for.
+
+    A non-loopback host or an unlisted scheme would let an attacker who can
+    reach ``/auth/native/authorize`` (a public route) turn the gateway's
+    authenticated callback into an open redirect that leaks a live
+    authorization code to an arbitrary origin — so this check is a security
+    boundary, not ergonomics.
     """
     from urllib.parse import urlparse
 
     if not raw:
         raise HTTPException(status_code=400, detail="redirect_uri required")
     parsed = urlparse(raw)
-    if parsed.scheme != "http":
+    scheme = (parsed.scheme or "").lower()
+    if scheme in NATIVE_APP_REDIRECT_SCHEMES:
+        if parsed.netloc or parsed.path != NATIVE_APP_REDIRECT_PATH:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"native redirect_uri for scheme {scheme!r} must be exactly "
+                    f"{scheme}:{NATIVE_APP_REDIRECT_PATH}"
+                ),
+            )
+        return raw
+    if scheme != "http":
         raise HTTPException(
             status_code=400,
-            detail="native redirect_uri must be http:// on the loopback interface",
+            detail=(
+                "native redirect_uri must be http:// on the loopback interface "
+                "or a registered native-app scheme"
+            ),
         )
     host = (parsed.hostname or "").lower()
     if host not in ("127.0.0.1", "::1"):
@@ -341,7 +371,7 @@ async def auth_native_authorize(
         )
     if not code_challenge:
         raise HTTPException(status_code=400, detail="code_challenge required")
-    _validate_loopback_redirect_uri(redirect_uri)
+    _validate_native_redirect_uri(redirect_uri)
 
     # Resolve the provider. With exactly one brokerable session provider
     # registered (the common hosted case) an empty ``provider`` selects it,

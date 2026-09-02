@@ -1,10 +1,10 @@
 /**
- * Mobile connection screen (M1: manual URL + pasted bearer token).
+ * Mobile connection screen.
  *
- * Rendered standalone when the app has no saved connection, and as the
- * ``/connect`` route inside the layout to inspect or change it. M2 replaces
- * the pasted token with the RFC 8252 sign-in (Custom Tabs + PKCE); M6 adds QR
- * pairing. The probe/verify helpers are already the shape those need.
+ * Primary path (M2): gateway URL → probe public ``/api/status`` → RFC 8252
+ * sign-in in the system browser via the native bridge → connected.
+ * Fallback: paste an access token (kept for gateways without the native
+ * flow and for testing without a browser). M6 adds QR pairing on top.
  */
 import { useState } from "react";
 import { useNavigate } from "react-router";
@@ -19,7 +19,18 @@ import {
   verifyGatewayBearer,
   type GatewayStatusProbe,
 } from "@/lib/gateway-probe";
-import { connectTo, disconnect, useMobileConnection } from "@/lib/mobile-connection";
+import {
+  connectWithToken,
+  disconnect,
+  signIn,
+  useMobileConnection,
+} from "@/lib/mobile-connection";
+import {
+  NativeAuthError,
+  chooseRedirectMode,
+  gatewaySupportsNativeLogin,
+  getNativeAuthBridge,
+} from "@/lib/native-auth";
 
 interface ConnectionPageProps {
   /** Full-screen, no layout around it (first run / signed out). */
@@ -30,18 +41,34 @@ function describeProbe(p: GatewayStatusProbe): string {
   const bits: string[] = [];
   if (p.version) bits.push(`Hermes ${p.version}`);
   if (p.auth_providers?.length) bits.push(`auth: ${p.auth_providers.join(", ")}`);
-  if (p.auth_flows?.includes("native_pkce")) bits.push("native sign-in supported");
-  return bits.join(" · ") || "Gateway reachable.";
+  bits.push(gatewaySupportsNativeLogin(p.auth_flows) ? "sign-in supported" : "no native sign-in (paste a token)");
+  return bits.join(" · ");
+}
+
+function describeError(err: unknown): string {
+  if (err instanceof NativeAuthError) {
+    switch (err.code) {
+      case "cancelled":
+        return "Sign-in was cancelled.";
+      case "session_expired":
+        return "The session has expired. Sign in again.";
+      default:
+        return err.message;
+    }
+  }
+  return err instanceof Error ? err.message : String(err);
 }
 
 export default function ConnectionPage({ standalone = false }: ConnectionPageProps) {
   const navigate = useNavigate();
   const connection = useMobileConnection();
+  const nativeAvailable = getNativeAuthBridge().available;
   const [url, setUrl] = useState(() =>
     connection ? `${connection.origin}${connection.basePath}` : "",
   );
   const [token, setToken] = useState("");
-  const [busy, setBusy] = useState<"probe" | "connect" | null>(null);
+  const [showToken, setShowToken] = useState(false);
+  const [busy, setBusy] = useState<"probe" | "signin" | "token" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [probe, setProbe] = useState<string | null>(null);
 
@@ -54,38 +81,57 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
       const status = await probeGatewayStatus(origin, basePath);
       setProbe(describeProbe(status));
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeError(err));
     } finally {
       setBusy(null);
     }
   };
 
-  const handleConnect = async () => {
+  const handleSignIn = async () => {
     setError(null);
-    setBusy("connect");
+    setBusy("signin");
+    try {
+      const { origin, basePath } = normalizeGatewayUrl(url);
+      const status = await probeGatewayStatus(origin, basePath);
+      if (!gatewaySupportsNativeLogin(status.auth_flows)) {
+        throw new Error("This gateway is too old for native sign-in. Update it, or paste a token below.");
+      }
+      await signIn({ origin, basePath, redirectMode: chooseRedirectMode(status.auth_flows) });
+      navigate("/sessions", { replace: true });
+    } catch (err) {
+      setError(describeError(err));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const handleToken = async () => {
+    setError(null);
+    setBusy("token");
     try {
       const { origin, basePath } = normalizeGatewayUrl(url);
       const trimmedToken = token.trim();
-      if (!trimmedToken) throw new Error("Paste a bearer token.");
+      if (!trimmedToken) throw new Error("Paste an access token.");
       const me = await verifyGatewayBearer(origin, basePath, trimmedToken);
-      connectTo({
+      await connectWithToken({
         origin,
         basePath,
-        token: trimmedToken,
+        accessToken: trimmedToken,
+        expiresAt: me.expires_at ?? 0,
         userId: me.user_id,
         provider: me.provider,
       });
       setToken("");
       navigate("/sessions", { replace: true });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      setError(describeError(err));
     } finally {
       setBusy(null);
     }
   };
 
-  const handleDisconnect = () => {
-    disconnect();
+  const handleDisconnect = async () => {
+    await disconnect();
     setProbe(null);
     setError(null);
   };
@@ -134,19 +180,6 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
             />
           </label>
 
-          <label className="flex flex-col gap-1 text-sm">
-            <span>Bearer token</span>
-            <Input
-              value={token}
-              onChange={(e) => setToken(e.target.value)}
-              placeholder="Paste an access token (temporary — sign-in arrives in M2)"
-              type="password"
-              autoCapitalize="none"
-              autoCorrect="off"
-              spellCheck={false}
-            />
-          </label>
-
           {probe && <div className="text-sm text-green-600 dark:text-green-400">{probe}</div>}
           {error && (
             <div role="alert" className="text-sm text-red-600 dark:text-red-400">
@@ -158,15 +191,49 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
             <Button onClick={() => void handleProbe()} disabled={busy !== null}>
               {busy === "probe" ? "Testing…" : "Test connection"}
             </Button>
-            <Button onClick={() => void handleConnect()} disabled={busy !== null}>
-              {busy === "connect" ? "Connecting…" : "Connect"}
+            <Button onClick={() => void handleSignIn()} disabled={busy !== null || !nativeAvailable}>
+              {busy === "signin" ? "Waiting for browser…" : "Sign in"}
             </Button>
             {connection && (
-              <Button onClick={handleDisconnect} disabled={busy !== null}>
+              <Button onClick={() => void handleDisconnect()} disabled={busy !== null}>
                 Disconnect
               </Button>
             )}
           </div>
+          {!nativeAvailable && (
+            <div className="text-xs opacity-70">
+              Sign-in opens the system browser and is only available in the Hermes app.
+            </div>
+          )}
+
+          <button
+            type="button"
+            className="text-left text-xs underline opacity-70"
+            onClick={() => setShowToken((v) => !v)}
+          >
+            {showToken ? "Hide advanced" : "Advanced: paste an access token"}
+          </button>
+          {showToken && (
+            <div className="flex flex-col gap-2">
+              <label className="flex flex-col gap-1 text-sm">
+                <span>Access token</span>
+                <Input
+                  value={token}
+                  onChange={(e) => setToken(e.target.value)}
+                  placeholder="Paste a bearer token"
+                  type="password"
+                  autoCapitalize="none"
+                  autoCorrect="off"
+                  spellCheck={false}
+                />
+              </label>
+              <div>
+                <Button onClick={() => void handleToken()} disabled={busy !== null}>
+                  {busy === "token" ? "Connecting…" : "Connect with token"}
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

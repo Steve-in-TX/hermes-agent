@@ -13,6 +13,7 @@ public class MainActivity extends BridgeActivity {
         // boots so they exist when the web layer calls registerPlugin.
         registerPlugin(HermesHttpPlugin.class);
         registerPlugin(HermesSocketPlugin.class);
+        registerPlugin(HermesAuthPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

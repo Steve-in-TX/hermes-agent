@@ -16,6 +16,8 @@ export interface GatewayIdentity {
   user_id: string;
   provider: string;
   display_name?: string;
+  /** Unix seconds; absent on older gateways. */
+  expires_at?: number;
 }
 
 type FetchLike = (url: string, init?: RequestInit) => Promise<Response>;

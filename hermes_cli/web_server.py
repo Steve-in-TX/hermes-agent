@@ -4019,6 +4019,12 @@ async def get_status(profile: Optional[str] = None):
                 auth_flows.append("cookie")
                 if _list_session_providers():
                     auth_flows.append("native_pkce")
+                    # The gateway also redirects native logins to the
+                    # Hermes app's private-use scheme (RFC 8252 §7.1) —
+                    # see dashboard_auth.routes.NATIVE_APP_REDIRECT_SCHEMES.
+                    # Mobile clients probe for this before choosing the
+                    # scheme redirect over a loopback listener.
+                    auth_flows.append("native_app_scheme")
         except Exception:
             # Module not importable yet (early startup) — leave as [].
             pass

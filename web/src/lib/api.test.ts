@@ -285,6 +285,38 @@ describe("remote backend target (bundled client)", () => {
     window.removeEventListener(REAUTH_EVENT, onReauth);
   });
 
+  it("refreshes once and retries a remote 401, then gives up with a reauth event", async () => {
+    let token = "stale";
+    const refresh = vi.fn(async () => {
+      token = "fresh";
+      return true;
+    });
+    setBackendTarget({ ...REMOTE, bearer: () => token, refresh });
+    const fetchMock = vi.fn<typeof fetch>(async (_url, init) => {
+      const auth = (init?.headers as Headers).get("Authorization");
+      return auth === "Bearer fresh"
+        ? new Response(JSON.stringify({ ok: true }), { status: 200 })
+        : new Response(JSON.stringify({ error: "unauthenticated" }), { status: 401 });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const onReauth = vi.fn();
+    window.addEventListener(REAUTH_EVENT, onReauth);
+
+    await expect(fetchJSON("/api/status")).resolves.toEqual({ ok: true });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(onReauth).not.toHaveBeenCalled();
+
+    // Refresh "succeeds" but the gateway still says 401: exactly one retry, then reauth.
+    token = "stale";
+    refresh.mockImplementation(async () => true);
+    await expect(fetchJSON("/api/status")).rejects.toThrow(/^401/);
+    expect(refresh).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(4);
+    expect(onReauth).toHaveBeenCalledTimes(1);
+    window.removeEventListener(REAUTH_EVENT, onReauth);
+  });
+
   it("logout on a remote target only announces reauth", async () => {
     setBackendTarget(REMOTE);
     const fetchMock = jsonFetchMock({ ok: true });

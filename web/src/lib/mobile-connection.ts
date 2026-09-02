@@ -1,26 +1,33 @@
 /**
  * The Android app's notion of "which gateway am I signed in to".
  *
- * Owns the saved connection, applies it to ``backend-target`` on boot, and
- * drops it when the gateway rejects the credential (``REAUTH_EVENT``) so the
- * shell falls back to the connection screen.
+ * Owns the active session, applies it to ``backend-target`` (bearer +
+ * refresh hook), refreshes proactively before expiry, and drops it when the
+ * gateway says the session is gone.
  *
- * M1 storage note: the bearer is kept in ``localStorage`` because M1 pastes a
- * token by hand. M2 replaces this with the ``HermesTokenStore`` plugin
- * (EncryptedSharedPreferences / Keystore) and the RFC 8252 login; nothing
- * outside this module should know where the token lives.
+ * Storage: tokens live in the native ``HermesAuth`` plugin's encrypted store
+ * (Keystore-backed). JS holds the access token in memory only. When no
+ * native bridge is installed (browser dev builds), the connection falls
+ * back to ``localStorage`` so the flow can still be exercised.
  */
 import { useSyncExternalStore } from "react";
 
-import { REAUTH_EVENT, setBackendTarget } from "@/lib/backend-target";
+import { REAUTH_EVENT, setBackendTarget, type ReauthDetail } from "@/lib/backend-target";
+import {
+  NativeAuthError,
+  getNativeAuthBridge,
+  refreshDelayMs,
+  type NativeLoginOptions,
+  type NativeSession,
+} from "@/lib/native-auth";
 
-export interface SavedConnection {
+/** What the UI sees. No token. */
+export interface ConnectionInfo {
   origin: string;
   basePath: string;
-  token: string;
-  /** From ``/api/auth/me`` at connect time, for display only. */
   userId?: string;
   provider?: string;
+  expiresAt?: number;
 }
 
 export const CONNECTION_STORAGE_KEY = "hermes.mobile.connection";
@@ -36,8 +43,13 @@ function defaultStorage(): StorageLike | null {
   }
 }
 
-let current: SavedConnection | null = null;
+let current: ConnectionInfo | null = null;
+let accessToken: string | null = null;
+let refreshTimer: ReturnType<typeof setTimeout> | null = null;
+let refreshInFlight: Promise<boolean> | null = null;
 const listeners = new Set<() => void>();
+/** Windows that already have the reauth listener (bootstrap is idempotent). */
+const wiredTargets = new WeakSet<object>();
 
 function emit(): void {
   for (const listener of listeners) listener();
@@ -48,37 +60,40 @@ function subscribe(listener: () => void): () => void {
   return () => listeners.delete(listener);
 }
 
-export function loadSavedConnection(storage: StorageLike | null = defaultStorage()): SavedConnection | null {
+// ── browser fallback storage (no native bridge) ─────────────────────
+
+export function loadSavedSession(storage: StorageLike | null = defaultStorage()): NativeSession | null {
   try {
     const raw = storage?.getItem(CONNECTION_STORAGE_KEY);
     if (!raw) return null;
     const parsed: unknown = JSON.parse(raw);
     if (typeof parsed !== "object" || parsed === null) return null;
     const rec = parsed as Record<string, unknown>;
-    if (typeof rec.origin !== "string" || typeof rec.token !== "string" || !rec.origin || !rec.token) {
+    if (typeof rec.origin !== "string" || typeof rec.accessToken !== "string" || !rec.origin || !rec.accessToken) {
       return null;
     }
     return {
       origin: rec.origin,
       basePath: typeof rec.basePath === "string" ? rec.basePath : "",
-      token: rec.token,
-      userId: typeof rec.userId === "string" ? rec.userId : undefined,
-      provider: typeof rec.provider === "string" ? rec.provider : undefined,
+      accessToken: rec.accessToken,
+      expiresAt: typeof rec.expiresAt === "number" ? rec.expiresAt : 0,
+      userId: typeof rec.userId === "string" ? rec.userId : "",
+      provider: typeof rec.provider === "string" ? rec.provider : "",
     };
   } catch {
     return null;
   }
 }
 
-export function saveConnection(conn: SavedConnection, storage: StorageLike | null = defaultStorage()): void {
+export function saveSession(session: NativeSession, storage: StorageLike | null = defaultStorage()): void {
   try {
-    storage?.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(conn));
+    storage?.setItem(CONNECTION_STORAGE_KEY, JSON.stringify(session));
   } catch {
-    /* storage unavailable — the in-memory connection still works this run */
+    /* storage unavailable — the in-memory session still works this run */
   }
 }
 
-export function clearSavedConnection(storage: StorageLike | null = defaultStorage()): void {
+export function clearSavedSession(storage: StorageLike | null = defaultStorage()): void {
   try {
     storage?.removeItem(CONNECTION_STORAGE_KEY);
   } catch {
@@ -86,45 +101,149 @@ export function clearSavedConnection(storage: StorageLike | null = defaultStorag
   }
 }
 
-/** Make ``conn`` (or nothing) the active backend target and notify subscribers. */
-export function applyConnection(conn: SavedConnection | null): void {
-  current = conn;
-  setBackendTarget(
-    conn
-      ? { origin: conn.origin, basePath: conn.basePath, bearer: () => conn.token }
-      : null,
-  );
+// ── session lifecycle ───────────────────────────────────────────────
+
+function clearRefreshTimer(): void {
+  if (refreshTimer !== null) {
+    clearTimeout(refreshTimer);
+    refreshTimer = null;
+  }
+}
+
+function scheduleRefresh(expiresAt: number): void {
+  clearRefreshTimer();
+  const delay = refreshDelayMs(expiresAt);
+  if (delay === null || !getNativeAuthBridge().available) return;
+  // setTimeout overflows past ~24.8 days; a session that long is refreshed
+  // on the next launch instead.
+  if (delay > 0x7fffffff) return;
+  refreshTimer = setTimeout(() => {
+    refreshTimer = null;
+    void refreshSession();
+  }, delay);
+}
+
+/** Make ``session`` (or nothing) the active backend target and notify subscribers. */
+export function applySession(session: NativeSession | null): void {
+  clearRefreshTimer();
+  if (!session) {
+    current = null;
+    accessToken = null;
+    setBackendTarget(null);
+    emit();
+    return;
+  }
+  current = {
+    origin: session.origin,
+    basePath: session.basePath,
+    userId: session.userId || undefined,
+    provider: session.provider || undefined,
+    expiresAt: session.expiresAt || undefined,
+  };
+  accessToken = session.accessToken;
+  setBackendTarget({
+    origin: session.origin,
+    basePath: session.basePath,
+    bearer: () => accessToken,
+    refresh: refreshSession,
+  });
+  scheduleRefresh(session.expiresAt);
   emit();
 }
 
-export function connectTo(conn: SavedConnection): void {
-  saveConnection(conn);
-  applyConnection(conn);
+/**
+ * Rotate the session through the native bridge. Single-flighted: parallel
+ * 401s share one refresh. Resolves ``true`` when a new access token is in
+ * place. ``session_expired`` wipes the connection (the gateway's terminal
+ * answer); ``unavailable`` keeps it — a transient IDP outage must not log
+ * the user out.
+ */
+export function refreshSession(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight;
+  const bridge = getNativeAuthBridge();
+  if (!bridge.available || !current) return Promise.resolve(false);
+  refreshInFlight = (async () => {
+    try {
+      const session = await bridge.refresh();
+      applySession(session);
+      return true;
+    } catch (err) {
+      if (err instanceof NativeAuthError && err.code === "session_expired") {
+        applySession(null);
+        clearSavedSession();
+      }
+      return false;
+    } finally {
+      refreshInFlight = null;
+    }
+  })();
+  return refreshInFlight;
 }
 
-export function disconnect(): void {
-  clearSavedConnection();
-  applyConnection(null);
+/** RFC 8252 sign-in through the system browser (native bridge required). */
+export async function signIn(opts: NativeLoginOptions): Promise<ConnectionInfo> {
+  const session = await getNativeAuthBridge().login(opts);
+  applySession(session);
+  return current as ConnectionInfo;
 }
 
-export function getCurrentConnection(): SavedConnection | null {
+/** Manual path: a pasted access token, kept in the native store when present. */
+export async function connectWithToken(session: NativeSession): Promise<ConnectionInfo> {
+  const bridge = getNativeAuthBridge();
+  const stored = bridge.available ? await bridge.setSession(session) : session;
+  if (!bridge.available) saveSession(stored);
+  applySession(stored);
+  return current as ConnectionInfo;
+}
+
+export async function disconnect(): Promise<void> {
+  clearSavedSession();
+  applySession(null);
+  try {
+    await getNativeAuthBridge().logout();
+  } catch {
+    /* best effort — the in-memory session is already gone */
+  }
+}
+
+export function getCurrentConnection(): ConnectionInfo | null {
   return current;
+}
+
+/** Test/diagnostic access to the in-memory access token. */
+export function getAccessToken(): string | null {
+  return accessToken;
 }
 
 /**
- * Boot-time wiring for the mobile shell: restore the saved connection and
- * drop it whenever the API layer reports the credential is no longer usable.
- * M1: any rejection returns to the connection screen; M2 will try a refresh
- * first and only wipe on the gateway's 401 ``session_expired``.
+ * Boot-time wiring for the mobile shell: restore the stored session and
+ * react to the API layer reporting the credential is no longer usable
+ * (``fetchJSON`` already tried one refresh before announcing that).
  */
-export function bootstrapMobileConnection(
+export async function bootstrapMobileConnection(
   target: Pick<Window, "addEventListener"> | null = typeof window === "undefined" ? null : window,
-): SavedConnection | null {
-  applyConnection(loadSavedConnection());
-  target?.addEventListener(REAUTH_EVENT, () => disconnect());
+): Promise<ConnectionInfo | null> {
+  const bridge = getNativeAuthBridge();
+  const session = bridge.available ? await bridge.getSession() : loadSavedSession();
+  applySession(session);
+  if (!target || wiredTargets.has(target)) return current;
+  wiredTargets.add(target);
+  target.addEventListener(REAUTH_EVENT, (event) => {
+    const reason = (event as CustomEvent<ReauthDetail>).detail?.reason;
+    if (reason === "logout") {
+      void disconnect();
+      return;
+    }
+    // "unauthorized" after a failed retry: the access token is dead. Try one
+    // more refresh (covers a race with the proactive timer); if the session
+    // is really gone the bridge already wiped it and refreshSession clears us.
+    void refreshSession().then((ok) => {
+      if (!ok && !getNativeAuthBridge().available) void disconnect();
+    });
+  });
   return current;
 }
 
-export function useMobileConnection(): SavedConnection | null {
+export function useMobileConnection(): ConnectionInfo | null {
   return useSyncExternalStore(subscribe, getCurrentConnection, getCurrentConnection);
 }

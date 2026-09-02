@@ -21,12 +21,19 @@ export interface BackendTarget {
   basePath: string;
   /** Bearer for remote targets; ``null`` in the browser dashboard. */
   bearer: () => string | null;
+  /**
+   * Try to obtain a fresh bearer after a 401. Resolves ``true`` when
+   * ``bearer()`` now returns a new credential worth retrying with; ``false``
+   * (never throws) when the session is gone or the refresh could not run.
+   */
+  refresh?: () => Promise<boolean>;
 }
 
 export interface RemoteBackendTarget {
   origin: string;
   basePath?: string;
   bearer: () => string | null;
+  refresh?: () => Promise<boolean>;
 }
 
 /** Window event fired when a remote target's credential is rejected or dropped. */
@@ -78,6 +85,7 @@ export function setBackendTarget(target: RemoteBackendTarget | null): void {
     origin: target.origin.replace(/\/+$/, ""),
     basePath: normalizeBasePath(target.basePath),
     bearer: target.bearer,
+    refresh: target.refresh,
   };
 }
 

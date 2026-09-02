@@ -155,10 +155,14 @@ export async function fetchJSON<T>(
   });
   if (res.status === 401 && isRemoteTarget()) {
     // Bundled client: there is no /login page to navigate to, and
-    // navigating away would unload the host WebView. Announce the rejected
-    // credential so the shell re-authenticates; the caller gets the plain
-    // error thrown below.
+    // navigating away would unload the host WebView. An access token can
+    // expire between requests, so give the target one chance to refresh
+    // and retry; if that fails, announce the rejected credential so the
+    // shell re-authenticates and let the plain error below reach the caller.
     if (!options?.allowUnauthorized) {
+      if (!options?.retriedAfterRefresh && (await getBackendTarget().refresh?.())) {
+        return fetchJSON<T>(url, init, { ...options, retriedAfterRefresh: true });
+      }
       dispatchReauthRequired("unauthorized");
     }
   } else if (res.status === 401) {
@@ -1895,6 +1899,11 @@ interface FetchJSONOptions {
    *  whose 401 is an expected signal (e.g. /api/auth/me in non-gated mode)
    *  rather than evidence of a rotated session token. */
   allowUnauthorized?: boolean;
+  /**
+   * Internal: set on the single retry ``fetchJSON`` makes after a remote
+   * target refreshed its bearer, so a still-failing request cannot loop.
+   */
+  retriedAfterRefresh?: boolean;
 }
 
 export interface ActionStatusResponse {
