@@ -1,7 +1,16 @@
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api, fetchJSON, setManagementProfile } from "./api";
+import {
+  api,
+  authedFetch,
+  buildWsAuthParam,
+  buildWsUrl,
+  fetchJSON,
+  getWsTicket,
+  setManagementProfile,
+} from "./api";
+import { REAUTH_EVENT, setBackendTarget } from "./backend-target";
 
 const reloadMocks = vi.hoisted(() => ({
   attemptDashboardTokenReloadOnce: vi.fn(() => false),
@@ -34,6 +43,7 @@ beforeEach(() => {
 
 afterEach(() => {
   setManagementProfile("");
+  setBackendTarget(null);
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
 });
@@ -198,5 +208,94 @@ describe("api OAuth helpers", () => {
       "/api/providers/oauth/anthropic/poll/oauth-session?profile=worker",
       "/api/providers/oauth/sessions/oauth-session?profile=worker",
     ]);
+  });
+});
+
+describe("remote backend target (bundled client)", () => {
+  const REMOTE = {
+    origin: "https://gw.example:9119",
+    basePath: "/hermes",
+    bearer: () => "tok-123",
+  };
+
+  it("keeps the default target byte-identical: relative URL, session header, cookies included", async () => {
+    const fetchMock = jsonFetchMock({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await fetchJSON("/api/status");
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/status");
+    expect((init as RequestInit).credentials).toBe("include");
+    const headers = (init as RequestInit).headers as Headers;
+    expect(headers.get(SESSION_HEADER)).toBe("stale-token");
+    expect(headers.has("Authorization")).toBe(false);
+  });
+
+  it.each([
+    ["fetchJSON", () => fetchJSON("/api/sessions?limit=1")],
+    ["authedFetch", () => authedFetch("/api/sessions?limit=1")],
+  ])("%s: absolute URL, bearer, credentials omitted, no session header", async (_name, run) => {
+    setBackendTarget(REMOTE);
+    const fetchMock = jsonFetchMock({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await run();
+
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://gw.example:9119/hermes/api/sessions?limit=1");
+    expect((init as RequestInit).credentials).toBe("omit");
+    const headers = (init as RequestInit).headers as Headers;
+    expect(headers.get("Authorization")).toBe("Bearer tok-123");
+    expect(headers.has(SESSION_HEADER)).toBe(false);
+  });
+
+  it("mints ws tickets with the bearer and always uses ticket auth for sockets", async () => {
+    setBackendTarget(REMOTE);
+    const fetchMock = jsonFetchMock({ ticket: "t-1", ttl_seconds: 30 });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(getWsTicket()).resolves.toEqual({ ticket: "t-1", ttl_seconds: 30 });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("https://gw.example:9119/hermes/api/auth/ws-ticket");
+    expect((init as RequestInit).method).toBe("POST");
+    expect((init as RequestInit).credentials).toBe("omit");
+    expect(((init as RequestInit).headers as Headers).get("Authorization")).toBe("Bearer tok-123");
+
+    // __HERMES_AUTH_REQUIRED__ is false in this suite; remote still means ticket.
+    await expect(buildWsAuthParam()).resolves.toEqual(["ticket", "t-1"]);
+    await expect(buildWsUrl("/api/events", { channel: "c" })).resolves.toBe(
+      "wss://gw.example:9119/hermes/api/events?channel=c&ticket=t-1",
+    );
+  });
+
+  it("turns a remote 401 into a reauth event and a plain error, never a navigation", async () => {
+    setBackendTarget(REMOTE);
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(JSON.stringify({ error: "session_expired", login_url: "/login" }), { status: 401 })),
+    );
+    const onReauth = vi.fn();
+    window.addEventListener(REAUTH_EVENT, onReauth);
+
+    await expect(fetchJSON("/api/status")).rejects.toThrow(/^401/);
+
+    expect(onReauth).toHaveBeenCalledTimes(1);
+    expect(reloadMocks.attemptDashboardTokenReloadOnce).not.toHaveBeenCalled();
+    window.removeEventListener(REAUTH_EVENT, onReauth);
+  });
+
+  it("logout on a remote target only announces reauth", async () => {
+    setBackendTarget(REMOTE);
+    const fetchMock = jsonFetchMock({ ok: true });
+    vi.stubGlobal("fetch", fetchMock);
+    const onReauth = vi.fn();
+    window.addEventListener(REAUTH_EVENT, onReauth);
+
+    await api.logout();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(onReauth).toHaveBeenCalledTimes(1);
+    window.removeEventListener(REAUTH_EVENT, onReauth);
   });
 });

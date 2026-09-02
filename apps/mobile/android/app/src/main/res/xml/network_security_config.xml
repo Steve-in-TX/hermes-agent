@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Hermes gateways on a LAN or Tailscale are commonly plain http:// (the
+  desktop app talks to them the same way). Android blocks cleartext by
+  default since API 28, and that policy also governs OkHttp, so the native
+  transport needs this exemption for M1 device testing. Release hardening
+  (M7) should narrow this to private ranges or require TLS with a
+  user-acknowledged opt-in per gateway.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

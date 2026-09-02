@@ -21,8 +21,10 @@ import {
   type GatewayEventName,
 } from "@hermes/shared";
 
-import { HERMES_BASE_PATH, buildWsAuthParam } from "@/lib/api";
+import { buildWsAuthParam } from "@/lib/api";
+import { getBackendTarget, remoteWsLocation } from "@/lib/backend-target";
 import { maybeReloadForLoopbackWsAuthFailure } from "@/lib/dashboard-auth-reload";
+import { getSocketFactory } from "@/lib/transport/socket";
 
 export type { ConnectionState, GatewayEvent, GatewayEventName };
 
@@ -34,6 +36,8 @@ export class GatewayClient extends JsonRpcGatewayClient {
       notConnectedErrorMessage: "gateway not connected",
       onSocketClose: (event) => maybeReloadForLoopbackWsAuthFailure(event.code),
       requestIdPrefix: "w",
+      // Native socket in the Android shell; undefined → platform WebSocket.
+      socketFactory: getSocketFactory(),
     });
   }
 
@@ -55,8 +59,9 @@ export class GatewayClient extends JsonRpcGatewayClient {
     await super.connect(
       buildHermesWebSocketUrl({
         authParam,
-        basePath: HERMES_BASE_PATH,
+        basePath: getBackendTarget().basePath,
         path: "/api/ws",
+        ...(remoteWsLocation() ?? {}),
       }),
     );
   }

@@ -11,6 +11,7 @@ import { Button } from "@nous-research/ui/ui/components/button";
 import { useModalBehavior } from "@/hooks/useModalBehavior";
 import { useProfileScope } from "@/contexts/useProfileScope";
 import { api } from "@/lib/api";
+import { openDashboardWebSocket } from "@/lib/transport/socket";
 import { maybeReloadForLoopbackWsAuthFailure } from "@/lib/dashboard-auth-reload";
 import { cn, themedBody } from "@/lib/utils";
 import { useTheme } from "@/themes";
@@ -402,7 +403,7 @@ export function HermesConsoleModal({ open, onClose }: HermesConsoleModalProps) {
         const params = profile ? { profile } : undefined;
         const url = await api.buildWsUrl("/api/console", params);
         if (cancelled) return;
-        const ws = new WebSocket(url);
+        const ws = openDashboardWebSocket(url);
         wsRef.current = ws;
 
         ws.onopen = () => {

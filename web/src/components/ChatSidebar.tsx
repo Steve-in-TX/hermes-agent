@@ -34,6 +34,7 @@ import { ModelReloadConfirm } from "@/components/ModelReloadConfirm";
 import { ReasoningPicker } from "@/components/ReasoningPicker";
 import { GatewayClient, type ConnectionState } from "@/lib/gatewayClient";
 import { api, buildWsUrl } from "@/lib/api";
+import { openDashboardWebSocket } from "@/lib/transport/socket";
 import { maybeReloadForLoopbackWsAuthFailure } from "@/lib/dashboard-auth-reload";
 import {
   EVENTS_CONNECT_TIMEOUT_MS,
@@ -340,7 +341,7 @@ export function ChatSidebar({
         if (unmounting || generation !== connectGeneration) {
           return;
         }
-        socket = new WebSocket(url);
+        socket = openDashboardWebSocket(url);
         ws = socket;
       } catch {
         if (unmounting || generation !== connectGeneration) {

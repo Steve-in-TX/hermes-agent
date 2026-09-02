@@ -1,5 +1,15 @@
 import { buildHermesWebSocketUrl } from "@hermes/shared";
 
+import {
+  dispatchReauthRequired,
+  getBackendTarget,
+  isRemoteTarget,
+  readInjectedBasePath,
+  remoteWsLocation,
+  resolveUrl,
+} from "@/lib/backend-target";
+import { driverFetch } from "@/lib/transport/http-driver";
+
 // The dashboard can be served either at the root of its host (e.g.
 // https://kanban.tilos.com/) or under a URL prefix when reverse-proxied
 // (e.g. https://mission-control.tilos.com/hermes/). The Python backend
@@ -7,17 +17,13 @@ import { buildHermesWebSocketUrl } from "@hermes/shared";
 // incoming ``X-Forwarded-Prefix`` header so the SPA can address its own
 // ``/api/...`` and ``/dashboard-plugins/...`` URLs correctly without a
 // rebuild. Empty string means "served at root".
-function readBasePath(): string {
-  if (typeof window === "undefined") return "";
-  const raw = window.__HERMES_BASE_PATH__ ?? "";
-  if (!raw) return "";
-  // Normalise: ensure leading slash, strip trailing slash.
-  const withLead = raw.startsWith("/") ? raw : `/${raw}`;
-  return withLead.replace(/\/+$/, "");
-}
-
-export const HERMES_BASE_PATH = readBasePath();
-const BASE = HERMES_BASE_PATH;
+//
+// WHERE requests go (origin + prefix + credential) is owned by
+// ``backend-target``: the browser dashboard keeps the same-origin default;
+// a bundled client (the Android app) points it at a remote gateway with a
+// bearer. Every request below goes through ``resolveUrl`` + ``driverFetch``
+// so that seam is the only place that knows.
+export const HERMES_BASE_PATH = readInjectedBasePath();
 
 import type { DashboardTheme } from "@/themes/types";
 import {
@@ -44,6 +50,32 @@ function setSessionHeader(headers: Headers, token: string): void {
   if (!headers.has(SESSION_HEADER)) {
     headers.set(SESSION_HEADER, token);
   }
+}
+
+/**
+ * Attach the credential for the active backend target.
+ *  - browser dashboard (default target): the server-injected session token
+ *    header in loopback mode; nothing in gated mode (the cookie rides along).
+ *  - remote target (bundled client): ``Authorization: Bearer`` from the
+ *    target. The injected token never exists there.
+ */
+function applyRequestAuth(headers: Headers): void {
+  if (isRemoteTarget()) {
+    const bearer = getBackendTarget().bearer();
+    if (bearer && !headers.has("Authorization")) {
+      headers.set("Authorization", `Bearer ${bearer}`);
+    }
+    return;
+  }
+  const token = window.__HERMES_SESSION_TOKEN__;
+  if (token) {
+    setSessionHeader(headers, token);
+  }
+}
+
+/** Cookies never cross to a remote target; the browser dashboard keeps ``include``. */
+function requestCredentials(init?: RequestInit): RequestCredentials {
+  return isRemoteTarget() ? "omit" : (init?.credentials ?? "include");
 }
 
 // ── Global management-profile scope ──────────────────────────────────
@@ -109,22 +141,27 @@ export async function fetchJSON<T>(
   options?: FetchJSONOptions,
 ): Promise<T> {
   url = withManagementProfile(url);
-  // Inject the session token into all /api/ requests.
+  // Inject the credential into all /api/ requests.
   const headers = new Headers(init?.headers);
-  const token = window.__HERMES_SESSION_TOKEN__;
-  if (token) {
-    setSessionHeader(headers, token);
-  }
-  const res = await fetch(`${BASE}${url}`, {
+  applyRequestAuth(headers);
+  const res = await driverFetch(resolveUrl(url), {
     ...init,
     headers,
     // ``credentials: 'include'`` so the cookie-auth path (gated mode) works
     // for any fetch routed through here. Loopback mode is unaffected — the
     // server doesn't read cookies and the legacy session-token header is
-    // already attached above.
-    credentials: init?.credentials ?? "include",
+    // already attached above. Remote targets send ``omit``.
+    credentials: requestCredentials(init),
   });
-  if (res.status === 401) {
+  if (res.status === 401 && isRemoteTarget()) {
+    // Bundled client: there is no /login page to navigate to, and
+    // navigating away would unload the host WebView. Announce the rejected
+    // credential so the shell re-authenticates; the caller gets the plain
+    // error thrown below.
+    if (!options?.allowUnauthorized) {
+      dispatchReauthRequired("unauthorized");
+    }
+  } else if (res.status === 401) {
     // Phase 6: the gated middleware emits a structured envelope so the
     // SPA can full-page-navigate to /login on session expiry. Parse it,
     // and only redirect on the known error codes — domain-level 401s
@@ -204,10 +241,16 @@ function pluginPath(name: string): string {
  * fetch a fresh ticket.
  */
 export async function getWsTicket(): Promise<{ ticket: string; ttl_seconds: number }> {
-  const res = await fetch(`${BASE}/api/auth/ws-ticket`, {
+  const init: RequestInit = {
     method: "POST",
-    credentials: "include",
-  });
+    credentials: requestCredentials(),
+  };
+  if (isRemoteTarget()) {
+    const headers = new Headers();
+    applyRequestAuth(headers);
+    init.headers = headers;
+  }
+  const res = await driverFetch(resolveUrl("/api/auth/ws-ticket"), init);
   if (!res.ok) {
     throw new Error(`/api/auth/ws-ticket: HTTP ${res.status}`);
   }
@@ -220,7 +263,8 @@ export async function getWsTicket(): Promise<{ ticket: string; ttl_seconds: numb
  * mode returns the injected session token.
  */
 export async function buildWsAuthParam(): Promise<[string, string]> {
-  if (window.__HERMES_AUTH_REQUIRED__) {
+  // A remote target is always gated (the app never sees an injected token).
+  if (isRemoteTarget() || window.__HERMES_AUTH_REQUIRED__) {
     const { ticket } = await getWsTicket();
     return ["ticket", ticket];
   }
@@ -250,14 +294,11 @@ export async function authedFetch(
   init?: RequestInit,
 ): Promise<Response> {
   const headers = new Headers(init?.headers);
-  const token = window.__HERMES_SESSION_TOKEN__;
-  if (token) {
-    setSessionHeader(headers, token);
-  }
-  return fetch(`${BASE}${url}`, {
+  applyRequestAuth(headers);
+  return driverFetch(resolveUrl(url), {
     ...init,
     headers,
-    credentials: init?.credentials ?? "include",
+    credentials: requestCredentials(init),
   });
 }
 
@@ -280,9 +321,11 @@ export async function buildWsUrl(
 ): Promise<string> {
   return buildHermesWebSocketUrl({
     authParam: await buildWsAuthParam(),
-    basePath: BASE,
+    basePath: getBackendTarget().basePath,
     params,
     path,
+    // Remote target: dial the gateway host, not window.location.
+    ...(remoteWsLocation() ?? {}),
   });
 }
 
@@ -362,8 +405,15 @@ export const api = {
     fetchJSON<AuthMeResponse>("/api/auth/me", undefined, {
       allowUnauthorized: true,
     }),
-  logout: () =>
-    fetch(`${BASE}/auth/logout`, {
+  logout: () => {
+    if (isRemoteTarget()) {
+      // Bundled client: the bearer session is the client's to forget. Tell
+      // the shell (it drops the stored credential and shows its connection
+      // screen); never navigate — that would unload the WebView.
+      dispatchReauthRequired("logout");
+      return Promise.resolve(new Response(null, { status: 204 }));
+    }
+    return driverFetch(resolveUrl("/auth/logout"), {
       method: "POST",
       credentials: "include",
     }).then((r) => {
@@ -372,7 +422,8 @@ export const api = {
       // redirect — the SPA needs to leave the protected area.
       window.location.assign("/login");
       return r;
-    }),
+    });
+  },
   getSessions: (
     limit = 20,
     offset = 0,

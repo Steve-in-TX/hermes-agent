@@ -7,19 +7,33 @@ import { I18nProvider } from "./i18n";
 import { exposePluginSDK } from "./plugins";
 import { ThemeProvider } from "./themes";
 import { HERMES_BASE_PATH } from "./lib/api";
+import { isMobileTarget } from "./lib/hermes-target";
+import { bootstrapMobileConnection } from "./lib/mobile-connection";
+import { installNativeTransportIfAvailable } from "./lib/transport";
 
-// Expose the plugin SDK before rendering so plugins loaded via <script>
-// can access React, components, etc. immediately.
-exposePluginSDK();
+async function boot(): Promise<void> {
+  if (isMobileTarget()) {
+    // Android shell: swap fetch/WebSocket for the native OkHttp plugins and
+    // restore the saved gateway connection before anything can request.
+    await installNativeTransportIfAvailable();
+    bootstrapMobileConnection();
+  }
 
-createRoot(document.getElementById("root")!).render(
-  <BrowserRouter basename={HERMES_BASE_PATH || undefined}>
-    <I18nProvider>
-      <ThemeProvider>
-        <SystemActionsProvider>
-          <App />
-        </SystemActionsProvider>
-      </ThemeProvider>
-    </I18nProvider>
-  </BrowserRouter>,
-);
+  // Expose the plugin SDK before rendering so plugins loaded via <script>
+  // can access React, components, etc. immediately.
+  exposePluginSDK();
+
+  createRoot(document.getElementById("root")!).render(
+    <BrowserRouter basename={HERMES_BASE_PATH || undefined}>
+      <I18nProvider>
+        <ThemeProvider>
+          <SystemActionsProvider>
+            <App />
+          </SystemActionsProvider>
+        </ThemeProvider>
+      </I18nProvider>
+    </BrowserRouter>,
+  );
+}
+
+void boot();

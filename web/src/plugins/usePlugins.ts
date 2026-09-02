@@ -9,6 +9,7 @@
 
 import { useState, useEffect, useRef } from "react";
 import { api, HERMES_BASE_PATH } from "@/lib/api";
+import { isMobileTarget } from "@/lib/hermes-target";
 import type { PluginManifest, RegisteredPlugin } from "./types";
 import {
   getPluginComponent,
@@ -83,6 +84,12 @@ export function usePlugins() {
   // This handles: new plugins added, plugins removed, manifest changes.
   // setManifests(list) will update routes if the server list differs from cache.
   useEffect(() => {
+    if (isMobileTarget()) {
+      // Bundled client: plugin bundles are served from the gateway origin
+      // and assume same-origin fetch/WS. The slot system is off on mobile.
+      setLoading(false);
+      return;
+    }
     api
       .getPlugins()
       .then((list) => {

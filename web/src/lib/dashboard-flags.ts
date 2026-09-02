@@ -1,3 +1,5 @@
+import { isMobileTarget } from "@/lib/hermes-target";
+
 declare global {
   interface Window {
     /**
@@ -20,5 +22,8 @@ declare global {
  * ever becomes conditional again.
  */
 export function isDashboardEmbeddedChatEnabled(): boolean {
-  return true;
+  // The mobile build never mounts the xterm/PTY chat page (it gets a
+  // structured chat on the JSON-RPC gateway instead), so the xterm chunk
+  // stays out of that bundle entirely.
+  return !isMobileTarget();
 }

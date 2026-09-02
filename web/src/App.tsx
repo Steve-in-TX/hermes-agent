@@ -55,6 +55,7 @@ import {
   Wrench,
   X,
   Zap,
+  Wifi,
 } from "lucide-react";
 import { Button } from "@nous-research/ui/ui/components/button";
 import { SelectionSwitcher } from "@nous-research/ui/ui/components/selection-switcher";
@@ -74,6 +75,8 @@ import { ProfileSwitcher } from "@/components/ProfileSwitcher";
 import { ProfileScopeBanner } from "@/components/ProfileScopeBanner";
 import { MemoryPressureBanner } from "@/components/MemoryPressureBanner";
 import { useSystemActions } from "@/contexts/useSystemActions";
+import { isMobileTarget } from "@/lib/hermes-target";
+import { useMobileConnection } from "@/lib/mobile-connection";
 import type { SystemAction } from "@/contexts/system-actions-context";
 // Route pages are lazy-loaded so the initial dashboard shell does not pay for
 // every admin surface (and heavy deps like xterm) up front.
@@ -96,6 +99,7 @@ const ChannelsPage = lazy(() => import("@/pages/ChannelsPage"));
 const WebhooksPage = lazy(() => import("@/pages/WebhooksPage"));
 const SystemPage = lazy(() => import("@/pages/SystemPage"));
 const ChatPage = lazy(() => import("@/pages/ChatPage"));
+const ConnectionPage = lazy(() => import("@/pages/ConnectionPage"));
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
 import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 import { useI18n } from "@/i18n";
@@ -221,6 +225,28 @@ const BUILTIN_NAV_REST: NavItem[] = [
     label: "Documentation",
     icon: BookOpen,
   },
+];
+
+/**
+ * Mobile build (Android app): only what a phone can drive today. Sessions is
+ * REST-only and works as-is; Connection is the app's own screen. Chat arrives
+ * in M3 as a structured gateway client, never the xterm page.
+ */
+const CONNECTION_NAV_ITEM: NavItem = {
+  path: "/connect",
+  label: "Connection",
+  icon: Wifi,
+};
+
+const MOBILE_ROUTES: Record<string, ComponentType> = {
+  "/": RootRedirect,
+  "/sessions": SessionsPage,
+  "/connect": ConnectionPage,
+};
+
+const MOBILE_NAV: NavItem[] = [
+  ...BUILTIN_NAV_REST.filter((item) => item.path === "/sessions"),
+  CONNECTION_NAV_ITEM,
 ];
 
 const ICON_MAP: Record<string, ComponentType<{ className?: string }>> = {
@@ -376,6 +402,8 @@ export default function App() {
   const { theme } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const closeMobile = useCallback(() => setMobileOpen(false), []);
+  // Android shell: null until a gateway is connected (see ConnectionPage).
+  const mobileConnection = useMobileConnection();
 
   const [collapsed, setCollapsed] = useState(() => {
     try {
@@ -449,14 +477,18 @@ export default function App() {
   );
 
   const builtinRoutes = useMemo(
-    () => ({
-      ...BUILTIN_ROUTES_CORE,
-      ...(embeddedChat ? { "/chat": ChatRouteSink } : {}),
-    }),
+    () =>
+      isMobileTarget()
+        ? MOBILE_ROUTES
+        : {
+            ...BUILTIN_ROUTES_CORE,
+            ...(embeddedChat ? { "/chat": ChatRouteSink } : {}),
+          },
     [embeddedChat],
   );
 
   const builtinNav = useMemo(() => {
+    if (isMobileTarget()) return MOBILE_NAV;
     const base = embeddedChat
       ? [CHAT_NAV_ITEM, ...BUILTIN_NAV_REST]
       : BUILTIN_NAV_REST;
@@ -508,6 +540,16 @@ export default function App() {
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   }, []);
+
+  // Android shell without a connected gateway: the connection screen is the
+  // whole app. Everything above still ran (hooks are unconditional).
+  if (isMobileTarget() && !mobileConnection) {
+    return (
+      <Suspense fallback={<RouteFallback />}>
+        <ConnectionPage standalone />
+      </Suspense>
+    );
+  }
 
   return (
     <ProfileProvider>

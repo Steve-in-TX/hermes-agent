@@ -35,6 +35,7 @@ import { ChatSessionList } from "@/components/ChatSessionList";
 import { usePageHeader } from "@/contexts/usePageHeader";
 import { useI18n } from "@/i18n";
 import { api } from "@/lib/api";
+import { openDashboardWebSocket } from "@/lib/transport/socket";
 import { latchChatActivation } from "@/lib/chat-activation";
 import { copyTextToClipboard } from "@/lib/clipboard";
 import { normalizeSessionTitle } from "@/lib/chat-title";
@@ -1193,7 +1194,7 @@ export default function ChatPage({ isActive = true }: { isActive?: boolean }) {
       if (unmounting || ticketSuperseded) return;
       clearTicketTimer();
 
-      const ws = new WebSocket(url);
+      const ws = openDashboardWebSocket(url);
       ws.binaryType = "arraybuffer";
       wsRef.current = ws;
       // W2 (NS-591): a mobile socket can wedge in CONNECTING after a radio
