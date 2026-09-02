@@ -97,7 +97,12 @@ const PairingPage = lazy(() => import("@/pages/PairingPage"));
 const ChannelsPage = lazy(() => import("@/pages/ChannelsPage"));
 const WebhooksPage = lazy(() => import("@/pages/WebhooksPage"));
 const SystemPage = lazy(() => import("@/pages/SystemPage"));
-const ChatPage = lazy(() => import("@/pages/ChatPage"));
+// The xterm/PTY page never mounts on the mobile build; the static target
+// check (a vite `define`) lets the bundler drop the chunk entirely.
+const ChatPage =
+  typeof __HERMES_TARGET__ !== "undefined" && __HERMES_TARGET__ === "mobile"
+    ? null
+    : lazy(() => import("@/pages/ChatPage"));
 const ConnectionPage = lazy(() => import("@/pages/ConnectionPage"));
 const GatewayChatPage = lazy(() => import("@/pages/GatewayChatPage"));
 import { LanguageSwitcher } from "@/components/LanguageSwitcher";
@@ -563,7 +568,7 @@ export default function App() {
       <header
         className={cn(
           "lg:hidden fixed top-0 left-0 right-0 z-40 min-h-14",
-          "flex items-center gap-2 px-4 py-2",
+          "flex items-center gap-2 px-4 py-2 pt-[calc(0.5rem+var(--hermes-inset-top))]",
           "border-b border-current/20",
           "bg-background-base",
         )}
@@ -606,7 +611,7 @@ export default function App() {
           fixed lg:hidden header is h-14/z-40; previously each banner carried
           its own mt-14 AND the content kept pt-14, so two visible banners
           stacked three offsets (NS-656 review P3). One spacer, applied once. */}
-      <div aria-hidden className="h-14 shrink-0 lg:hidden" />
+      <div aria-hidden className="h-[calc(3.5rem+var(--hermes-inset-top))] shrink-0 lg:hidden" />
       <PluginSlot name="header-banner" />
       <ProfileScopeBanner />
       <MemoryPressureBanner status={sidebarStatus} />
@@ -618,6 +623,7 @@ export default function App() {
             aria-label={t.app.navigation}
             className={cn(
               "fixed top-0 left-0 z-50 flex h-dvh max-h-dvh w-64 min-h-0 flex-col font-sans",
+              "pt-[var(--hermes-inset-top)] pb-[var(--hermes-inset-bottom)] lg:pt-0 lg:pb-0",
               "border-r border-current/20",
               "bg-background-base",
               "transition-[transform] duration-200 ease-[cubic-bezier(0.23,1,0.32,1)]",
@@ -846,7 +852,7 @@ export default function App() {
                           ) : null
                         }
                       >
-                        <ChatPage isActive={isChatRoute} />
+                        {ChatPage && <ChatPage isActive={isChatRoute} />}
                       </Suspense>
                     </div>
                   ) : isChatRoute ? (

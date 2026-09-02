@@ -13,7 +13,7 @@ import { Button } from "@nous-research/ui/ui/components/button";
 import { Input } from "@nous-research/ui/ui/components/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@nous-research/ui/ui/components/card";
 
-import { normalizeGatewayUrl } from "@/lib/backend-target";
+import { isCleartextOrigin, normalizeGatewayUrl } from "@/lib/backend-target";
 import {
   probeGatewayStatus,
   verifyGatewayBearer,
@@ -71,6 +71,13 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
   const [busy, setBusy] = useState<"probe" | "signin" | "token" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [probe, setProbe] = useState<string | null>(null);
+  const cleartext = (() => {
+    try {
+      return isCleartextOrigin(normalizeGatewayUrl(url).origin);
+    } catch {
+      return false;
+    }
+  })();
 
   const handleProbe = async () => {
     setError(null);
@@ -97,7 +104,7 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
         throw new Error("This gateway is too old for native sign-in. Update it, or paste a token below.");
       }
       await signIn({ origin, basePath, redirectMode: chooseRedirectMode(status.auth_flows) });
-      navigate("/sessions", { replace: true });
+      navigate("/chat", { replace: true });
     } catch (err) {
       setError(describeError(err));
     } finally {
@@ -122,7 +129,7 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
         provider: me.provider,
       });
       setToken("");
-      navigate("/sessions", { replace: true });
+      navigate("/chat", { replace: true });
     } catch (err) {
       setError(describeError(err));
     } finally {
@@ -180,6 +187,11 @@ export default function ConnectionPage({ standalone = false }: ConnectionPagePro
             />
           </label>
 
+          {cleartext && (
+            <div className="text-xs text-amber-600 dark:text-amber-400">
+              Plain http: the sign-in browser may show a security warning, and the token travels unencrypted. Prefer https for gateways reached over the internet.
+            </div>
+          )}
           {probe && <div className="text-sm text-green-600 dark:text-green-400">{probe}</div>}
           {error && (
             <div role="alert" className="text-sm text-red-600 dark:text-red-400">

@@ -18,6 +18,15 @@ const config: CapacitorConfig = {
     // cleartext exemption of its own; OkHttp is configured separately.
     allowMixedContent: false,
   },
+  plugins: {
+    // Edge-to-edge: Capacitor passes the system-bar insets through to the
+    // page's env(safe-area-inset-*) (the SPA lays out with them) and paints
+    // light status-bar icons over the dashboard's dark chrome.
+    SystemBars: {
+      style: "DARK",
+      insetsHandling: "css",
+    },
+  },
 };
 
 export default config;

@@ -6,9 +6,10 @@ gateway's CORS and WebSocket-Origin guards refuse the WebView origin
 (verified in [`spikes/m0`](spikes/m0/README.md)). The agent itself runs
 elsewhere: point the app at any `hermes serve` bound to a reachable address.
 
-Status: **M3 core — structured chat.** Streaming replies, tool cards,
-approvals, clarify questions, sudo/secret prompts, reconnect with pending
-approval replay. Sign-in (M2) and the Sessions page are unchanged.
+Status: **M4 — mobile polish** on top of the M3 chat. Safe-area-aware
+layout (status bar / gesture bar), light status-bar icons, keyboard-resized
+composer, cleartext warning on the connection screen, sign-in lands on Chat,
+xterm page excluded from the mobile bundle's import graph.
 
 ## Layout
 
@@ -149,8 +150,12 @@ Device findings to carry forward:
   `http://` gateway before the login form. Sign-in still works after
   "Continue to site", but M7 should recommend TLS for phone-facing gateways
   and the connection screen should warn when the URL is `http://`.
-- The dashboard header overlaps the status bar: no top safe-area inset yet
-  (the M4 `useSafeAreaInsets` item).
+- (Resolved in M4) The dashboard header overlapped the status bar. The SPA now
+  lays out with `--hermes-inset-top/bottom` (`env(safe-area-inset-*)`, which
+  Capacitor 8 passes through when the viewport declares `viewport-fit=cover`,
+  falling back to the `--safe-area-inset-*` variables it injects on older
+  WebViews); the fixed header, its spacer, and the drawer honour them, and
+  `SystemBars.style: "DARK"` paints light status-bar icons over the dark chrome.
 
 ## Not in M3 core (next)
 

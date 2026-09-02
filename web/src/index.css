@@ -13,6 +13,19 @@
 @source '../node_modules/@nous-research/ui/dist';
 
 /* ------------------------------------------------------------------ */
+/* Safe-area insets. `env()` is populated by browsers and by the       */
+/* Android WebView (Capacitor 8 passes system-bar insets through when  */
+/* the viewport declares `viewport-fit=cover`); older WebViews get the */
+/* `--safe-area-inset-*` variables Capacitor injects instead. Layout   */
+/* reads only these two so a phone's status bar never covers the       */
+/* fixed header and the composer clears the gesture bar.               */
+/* ------------------------------------------------------------------ */
+:root {
+  --hermes-inset-top: env(safe-area-inset-top, var(--safe-area-inset-top, 0px));
+  --hermes-inset-bottom: env(safe-area-inset-bottom, var(--safe-area-inset-bottom, 0px));
+}
+
+/* ------------------------------------------------------------------ */
 /* JetBrains Mono — bundled for the embedded TUI (/chat tab).          */
 /* Gives the terminal a proper monospace font even on systems where    */
 /* the user doesn't have one installed locally; xterm.js picks it up   */

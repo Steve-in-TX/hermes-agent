@@ -5,6 +5,7 @@ import {
   REAUTH_EVENT,
   dispatchReauthRequired,
   getBackendTarget,
+  isCleartextOrigin,
   isRemoteTarget,
   normalizeGatewayUrl,
   remoteWsLocation,
@@ -61,6 +62,19 @@ describe("normalizeGatewayUrl", () => {
       expect(() => normalizeGatewayUrl(input)).toThrow();
     },
   );
+});
+
+describe("isCleartextOrigin", () => {
+  it.each([
+    ["http://192.168.1.86:9137", true],
+    ["http://gw.tailnet.ts.net", true],
+    ["https://gw.example", false],
+    ["http://127.0.0.1:9119", false],
+    ["http://localhost:9119", false],
+    ["not a url", false],
+  ])("%s → %s", (origin, expected) => {
+    expect(isCleartextOrigin(origin)).toBe(expected);
+  });
 });
 
 describe("dispatchReauthRequired", () => {

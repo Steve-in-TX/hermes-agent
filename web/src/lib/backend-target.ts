@@ -131,6 +131,20 @@ export function normalizeGatewayUrl(input: string): { origin: string; basePath: 
   return { origin: parsed.origin, basePath: normalizeBasePath(parsed.pathname) };
 }
 
+/**
+ * True for a plain-http gateway that is not loopback. Phones reach these
+ * over LAN/Tailscale, but HTTPS-only browsers interpose a security
+ * interstitial at sign-in and the bearer travels unencrypted on the wire.
+ */
+export function isCleartextOrigin(origin: string): boolean {
+  try {
+    const url = new URL(origin);
+    return url.protocol === "http:" && !["127.0.0.1", "::1", "localhost", "[::1]"].includes(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
 /** Announce that the remote credential is no longer usable. */
 export function dispatchReauthRequired(reason: ReauthDetail["reason"]): void {
   if (typeof window === "undefined" || typeof window.dispatchEvent !== "function") return;
