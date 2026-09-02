@@ -183,11 +183,11 @@ can authenticate to it.
   replayed via `approval.pending`, and Deny was applied (the directory
   survived, the tool reported "Command denied").
 
-- M6: unit-tested (payload round trip and rejection table, registry
-  list/switch/forget, bridge mapping) and the APK builds; **not yet run on
-  the phone** (it disconnected before install). First device checks: the
-  migrated session still signs in, Saved gateways lists it, Scan QR opens the
-  camera and decodes the dashboard's code.
+- M6 on the Pixel 8 Pro: the M2-format session migrated into the
+  per-gateway store and signed in unchanged; Saved gateways lists it as
+  current; Scan QR brokered the camera permission and opened a live preview.
+  Decoding a real code from the dashboard's page is a manual check (needs the
+  code on another screen).
 - M5 on the Pixel 8 Pro: notification permission prompt on first connect;
   with the app backgrounded, an approval raised a notification carrying the
   command; **Deny tapped from the shade** reached the gateway (the tool

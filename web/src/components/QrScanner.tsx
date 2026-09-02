@@ -4,6 +4,7 @@
  * WebView on any Android, and in a desktop browser for development.
  */
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { X } from "lucide-react";
 
 import { Button } from "@nous-research/ui/ui/components/button";
@@ -85,7 +86,9 @@ export function QrScanner({ onResult, onClose }: QrScannerProps) {
     return stop;
   }, [onResult]);
 
-  return (
+  // Portaled: the page content lives in its own stacking context below the
+  // fixed app header, so a fixed overlay rendered in place would sit under it.
+  return createPortal(
     <div className="fixed inset-0 z-[60] flex flex-col bg-black text-white" role="dialog" aria-label="Scan a gateway QR code">
       <div className="flex items-center justify-between px-3 pt-[calc(0.5rem+var(--hermes-inset-top))] pb-2">
         <span className="text-sm">Point the camera at the pairing code</span>
@@ -107,6 +110,7 @@ export function QrScanner({ onResult, onClose }: QrScannerProps) {
       <div className="px-4 pb-[calc(1rem+var(--hermes-inset-bottom))] pt-2 text-xs opacity-70">
         The dashboard's "Mobile app" page shows the code. It carries only the gateway address.
       </div>
-    </div>
+    </div>,
+    document.body,
   );
 }
