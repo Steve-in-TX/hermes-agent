@@ -130,6 +130,11 @@ export function createCapacitorHttpDriver(
 ): HttpDriver {
   return {
     async fetch(url, init) {
+      if (!/^https?:\/\//i.test(url)) {
+        // Same-origin path with no remote target set: nothing to dial. Fail
+        // like a network error so callers' catch paths run (never crash).
+        throw new TypeError(`Hermes app: no gateway connected (cannot fetch ${url})`);
+      }
       const method = (init?.method ?? "GET").toUpperCase();
       const headers = new Headers(init?.headers);
       const encoded = await encodeRequestBody(init?.body ?? null);

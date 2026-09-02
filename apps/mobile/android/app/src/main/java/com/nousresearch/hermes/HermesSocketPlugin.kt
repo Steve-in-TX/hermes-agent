@@ -39,7 +39,12 @@ class HermesSocketPlugin : Plugin() {
         val protocols = call.getArray("protocols")?.toList<String>() ?: emptyList()
         val id = "ws${counter.incrementAndGet()}"
 
-        val builder = Request.Builder().url(url)
+        val builder = try {
+            Request.Builder().url(url)
+        } catch (e: IllegalArgumentException) {
+            call.reject("invalid url: ${e.message}", "failed")
+            return
+        }
         if (protocols.isNotEmpty()) {
             builder.header("Sec-WebSocket-Protocol", protocols.joinToString(", "))
         }

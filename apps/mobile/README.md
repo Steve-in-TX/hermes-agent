@@ -117,9 +117,24 @@ can authenticate to it.
   against a running gateway.
 - Backend: `tests/hermes_cli/test_dashboard_auth_native_flow.py` covers the
   scheme redirect end to end and the rejection table.
-- Android: the debug APK builds. **Not yet exercised on a device**: the
-  Custom Tab round trip, the intent-filter redirect, Keystore persistence
-  across process death. Those are the first things to check with a phone.
+- Android, verified on a Pixel 8 Pro (Android 17, Vanadium browser) against a
+  gateway on the LAN: native REST probe, Custom Tab sign-in to the password
+  form, redirect back through the `com.nousresearch.hermes:/oauth2redirect`
+  intent filter, token exchange, Sessions page over the native transport, and
+  the session restored from the encrypted store after `am force-stop`.
+  Not yet exercised on a device: the loopback-listener redirect (only used
+  against gateways without `native_app_scheme`), token refresh at expiry, and
+  any WebSocket (nothing on the Sessions page opens one; M3 will).
+
+Device findings to carry forward:
+
+- A browser in HTTPS-only mode (Vanadium, Chrome with the setting on) shows a
+  "site doesn't support a secure connection" interstitial for a plain
+  `http://` gateway before the login form. Sign-in still works after
+  "Continue to site", but M7 should recommend TLS for phone-facing gateways
+  and the connection screen should warn when the URL is `http://`.
+- The dashboard header overlaps the status bar: no top safe-area inset yet
+  (the M4 `useSafeAreaInsets` item).
 
 ## Notes for M3+
 

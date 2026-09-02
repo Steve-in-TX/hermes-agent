@@ -76,7 +76,6 @@ import { ProfileScopeBanner } from "@/components/ProfileScopeBanner";
 import { MemoryPressureBanner } from "@/components/MemoryPressureBanner";
 import { useSystemActions } from "@/contexts/useSystemActions";
 import { isMobileTarget } from "@/lib/hermes-target";
-import { useMobileConnection } from "@/lib/mobile-connection";
 import type { SystemAction } from "@/contexts/system-actions-context";
 // Route pages are lazy-loaded so the initial dashboard shell does not pay for
 // every admin surface (and heavy deps like xterm) up front.
@@ -402,8 +401,6 @@ export default function App() {
   const { theme } = useTheme();
   const [mobileOpen, setMobileOpen] = useState(false);
   const closeMobile = useCallback(() => setMobileOpen(false), []);
-  // Android shell: null until a gateway is connected (see ConnectionPage).
-  const mobileConnection = useMobileConnection();
 
   const [collapsed, setCollapsed] = useState(() => {
     try {
@@ -540,16 +537,6 @@ export default function App() {
     mql.addEventListener("change", onChange);
     return () => mql.removeEventListener("change", onChange);
   }, []);
-
-  // Android shell without a connected gateway: the connection screen is the
-  // whole app. Everything above still ran (hooks are unconditional).
-  if (isMobileTarget() && !mobileConnection) {
-    return (
-      <Suspense fallback={<RouteFallback />}>
-        <ConnectionPage standalone />
-      </Suspense>
-    );
-  }
 
   return (
     <ProfileProvider>

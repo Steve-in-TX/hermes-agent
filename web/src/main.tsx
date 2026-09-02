@@ -2,6 +2,7 @@ import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router";
 import "./index.css";
 import App from "./App";
+import { MobileGate } from "./components/MobileGate";
 import { SystemActionsProvider } from "./contexts/SystemActions";
 import { I18nProvider } from "./i18n";
 import { exposePluginSDK } from "./plugins";
@@ -29,9 +30,11 @@ async function boot(): Promise<void> {
     <BrowserRouter basename={HERMES_BASE_PATH || undefined}>
       <I18nProvider>
         <ThemeProvider>
-          <SystemActionsProvider>
-            <App />
-          </SystemActionsProvider>
+          <MobileGate>
+            <SystemActionsProvider>
+              <App />
+            </SystemActionsProvider>
+          </MobileGate>
         </ThemeProvider>
       </I18nProvider>
     </BrowserRouter>,

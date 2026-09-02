@@ -39,7 +39,12 @@ class HermesHttpPlugin : Plugin() {
         val textBody = call.getString("body")
         val base64Body = call.getString("bodyBase64")
 
-        val builder = Request.Builder().url(url)
+        val builder = try {
+            Request.Builder().url(url)
+        } catch (e: IllegalArgumentException) {
+            call.reject("invalid url: ${e.message}", "failed")
+            return
+        }
         var contentType: String? = null
         val keys = headers.keys()
         while (keys.hasNext()) {
