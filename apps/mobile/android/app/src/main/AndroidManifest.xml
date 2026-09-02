@@ -34,7 +34,26 @@
                 <data android:scheme="com.nousresearch.hermes" />
             </intent-filter>
 
+            <!-- Share target: text shared from another app lands in the composer. -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
+
         </activity>
+
+        <!-- M5: keeps the process (and the WebView's gateway socket) alive in
+             the background behind a "Connected to <gateway>" notification. -->
+        <service
+            android:name=".HermesConnectionService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
+
+        <!-- Approve / Deny taps on approval notifications. -->
+        <receiver
+            android:name=".NotificationActionReceiver"
+            android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
@@ -50,4 +69,8 @@
     <!-- Permissions -->
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
 </manifest>

@@ -14,6 +14,7 @@ public class MainActivity extends BridgeActivity {
         registerPlugin(HermesHttpPlugin.class);
         registerPlugin(HermesSocketPlugin.class);
         registerPlugin(HermesAuthPlugin.class);
+        registerPlugin(HermesShellPlugin.class);
         super.onCreate(savedInstanceState);
     }
 }

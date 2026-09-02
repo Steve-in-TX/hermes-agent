@@ -4,7 +4,7 @@
  * keyboard Ctrl/Cmd+Enter sends. Never submits while the IME is composing.
  */
 import { useEffect, useRef, useState } from "react";
-import { SendHorizontal, Square } from "lucide-react";
+import { Mic, SendHorizontal, Square } from "lucide-react";
 
 import { Button } from "@nous-research/ui/ui/components/button";
 
@@ -14,12 +14,32 @@ export interface ComposerProps {
   placeholder?: string;
   onSend: (text: string) => Promise<void> | void;
   onStop: () => Promise<void> | void;
+  /** Speech-to-text; omitted when the platform has none. Resolves null when cancelled. */
+  onDictate?: () => Promise<string | null>;
+  /** Text handed in from outside (share target); a new nonce replaces the draft. */
+  prefill?: { text: string; nonce: number } | null;
 }
 
-export function Composer({ busy, disabled = false, placeholder, onSend, onStop }: ComposerProps) {
+export function Composer({ busy, disabled = false, placeholder, onSend, onStop, onDictate, prefill }: ComposerProps) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [listening, setListening] = useState(false);
   const ref = useRef<HTMLTextAreaElement | null>(null);
+
+  useEffect(() => {
+    if (prefill && prefill.text) setText(prefill.text);
+  }, [prefill]);
+
+  const dictate = async () => {
+    if (!onDictate || listening) return;
+    setListening(true);
+    try {
+      const heard = await onDictate();
+      if (heard) setText((prev) => (prev.trim() ? `${prev.trimEnd()} ${heard}` : heard));
+    } finally {
+      setListening(false);
+    }
+  };
 
   // Grow with content, capped.
   useEffect(() => {
@@ -61,6 +81,19 @@ export function Composer({ busy, disabled = false, placeholder, onSend, onStop }
           }
         }}
       />
+      {onDictate && !busy && (
+        <Button
+          type="button"
+          ghost
+          size="icon"
+          className="min-h-12 min-w-12"
+          aria-label="Dictate"
+          disabled={disabled || listening}
+          onClick={() => void dictate()}
+        >
+          <Mic className="size-5" />
+        </Button>
+      )}
       {busy ? (
         <Button
           type="button"

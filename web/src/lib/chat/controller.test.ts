@@ -3,8 +3,35 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { ConnectionState, GatewayEvent } from "@hermes/shared";
 
+import type { NativeShellBridge, ShellEvents } from "../native-shell";
 import { ChatController, type ChatGatewayClient } from "./controller";
 import { getSessionState, getShell, resetChatStore } from "./store";
+
+function fakeShell() {
+  const handlers = new Map<keyof ShellEvents, Set<(p: never) => void>>();
+  const shell: NativeShellBridge = {
+    available: true,
+    requestNotificationPermission: vi.fn(async () => true),
+    startForeground: vi.fn(async () => {}),
+    stopForeground: vi.fn(async () => {}),
+    notifyApproval: vi.fn(async () => {}),
+    notifyTurnComplete: vi.fn(async () => {}),
+    cancelApprovalNotification: vi.fn(async () => {}),
+    startDictation: vi.fn(async () => null),
+    on: vi.fn((event, handler) => {
+      let set = handlers.get(event);
+      if (!set) {
+        set = new Set();
+        handlers.set(event, set);
+      }
+      set.add(handler as (p: never) => void);
+      return () => set!.delete(handler as (p: never) => void);
+    }),
+  };
+  const emit = <K extends keyof ShellEvents>(event: K, payload: ShellEvents[K]) =>
+    handlers.get(event)?.forEach((h) => (h as (p: ShellEvents[K]) => void)(payload));
+  return { shell, emit };
+}
 
 /** A scripted stand-in for JsonRpcGatewayClient. */
 function fakeClient() {
@@ -186,6 +213,68 @@ describe("ChatController", () => {
     await ctl.interrupt();
     expect(getSessionState("rt1").busy).toBe(false);
     expect(fake.calls.at(-1)).toEqual({ method: "session.interrupt", params: { session_id: "rt1" } });
+    ctl.dispose();
+  });
+
+  it("raises notifications only while hidden, and clears them on respond", async () => {
+    const fake = fakeClient();
+    const { shell } = fakeShell();
+    let hidden = false;
+    const ctl = new ChatController({ createClient: () => fake.client, shell, isHidden: () => hidden });
+    await ctl.connect();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(shell.startForeground).toHaveBeenCalledWith("gateway");
+    // Started again once the permission prompt is answered.
+    expect(shell.startForeground).toHaveBeenCalledTimes(2);
+    expect(shell.requestNotificationPermission).toHaveBeenCalledTimes(1);
+    await ctl.submit("go");
+
+    fake.emit("approval.request", "rt1", { request_id: "a1", command: "rm -rf x", description: "recursive delete", choices: ["once", "deny"] });
+    expect(shell.notifyApproval).not.toHaveBeenCalled();
+
+    hidden = true;
+    fake.emit("approval.request", "rt1", { request_id: "a2", command: "rm -rf y", description: "recursive delete", choices: ["once", "deny"] });
+    expect(shell.notifyApproval).toHaveBeenCalledWith({ sessionId: "rt1", requestId: "a2", command: "rm -rf y", description: "recursive delete" });
+
+    await ctl.respondApproval("rt1", "a2", "deny");
+    expect(shell.cancelApprovalNotification).toHaveBeenCalledWith("a2");
+
+    fake.emit("message.complete", "rt1", { text: "All   done.", status: "complete" });
+    expect(shell.notifyTurnComplete).toHaveBeenCalledWith({ sessionId: "rt1", text: "All done.", title: "Hermes finished" });
+
+    ctl.dispose();
+    expect(shell.stopForeground).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers a notification action and ignores anything but once/deny", async () => {
+    const fake = fakeClient();
+    const { shell, emit } = fakeShell();
+    const ctl = new ChatController({ createClient: () => fake.client, shell, isHidden: () => true });
+    await ctl.connect();
+    await ctl.submit("go");
+    fake.emit("approval.request", "rt1", { request_id: "a1", command: "rm -rf x", choices: ["once", "session", "always", "deny"] });
+
+    emit("approvalAction", { sessionId: "rt1", requestId: "a1", choice: "always" as never });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fake.calls.some((c) => c.method === "approval.respond")).toBe(false);
+
+    emit("approvalAction", { sessionId: "rt1", requestId: "a1", choice: "deny" });
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fake.calls.filter((c) => c.method === "approval.respond")[0].params).toEqual({ session_id: "rt1", request_id: "a1", choice: "deny" });
+    expect(getSessionState("rt1").approval).toBeNull();
+    ctl.dispose();
+  });
+
+  it("reconnects immediately when the network comes back", async () => {
+    const fake = fakeClient();
+    const { shell, emit } = fakeShell();
+    const ctl = new ChatController({ createClient: () => fake.client, shell, reconnectBaseMs: 60_000 });
+    await ctl.connect();
+    fake.drop();
+    expect(fake.client.connect).toHaveBeenCalledTimes(1);
+    emit("networkAvailable", {});
+    await vi.advanceTimersByTimeAsync(0);
+    expect(fake.client.connect).toHaveBeenCalledTimes(2);
     ctl.dispose();
   });
 

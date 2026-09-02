@@ -28,6 +28,7 @@ import { usePageHeader } from "@/contexts/usePageHeader";
 import { ChatController } from "@/lib/chat/controller";
 import { useChatShell, useSessionChat } from "@/lib/chat/store";
 import { GatewayClient } from "@/lib/gatewayClient";
+import { getNativeShellBridge } from "@/lib/native-shell";
 
 let controller: ChatController | null = null;
 
@@ -49,14 +50,22 @@ const CONNECTION_TONE = {
 
 export default function GatewayChatPage() {
   const ctl = useMemo(getChatController, []);
-  const shell = useChatShell();
-  const session = useSessionChat(shell.activeSessionId);
+  const shellState = useChatShell();
+  const session = useSessionChat(shellState.activeSessionId);
   const [searchParams, setSearchParams] = useSearchParams();
   const resumeParam = searchParams.get("resume");
   const { toast, showToast } = useToast();
   const { setTitle, setEnd } = usePageHeader();
   const [pickerOpen, setPickerOpen] = useState(false);
   const lastResumeRef = useRef<string | null>(null);
+  const shell = getNativeShellBridge();
+  const [prefill, setPrefill] = useState<{ text: string; nonce: number } | null>(null);
+
+  // Text shared from another app lands in the composer.
+  useEffect(
+    () => shell.on("shareText", ({ text }) => setPrefill({ text, nonce: Date.now() })),
+    [shell],
+  );
 
   // Connect once; reconnect immediately when the app returns to the foreground.
   useEffect(() => {
@@ -70,18 +79,18 @@ export default function GatewayChatPage() {
 
   // ?resume=<id> → resume that session (once per value, once connected).
   useEffect(() => {
-    if (!resumeParam || shell.connection !== "open") return;
+    if (!resumeParam || shellState.connection !== "open") return;
     if (lastResumeRef.current === resumeParam) return;
     lastResumeRef.current = resumeParam;
     ctl.resumeSession(resumeParam).catch((err: unknown) => {
       showToast(err instanceof Error ? err.message : String(err), "error");
     });
-  }, [ctl, resumeParam, shell.connection, showToast]);
+  }, [ctl, resumeParam, shellState.connection, showToast]);
 
   useEffect(() => {
-    setTitle(session.title || (shell.activeSessionId ? "Chat" : "New chat"));
+    setTitle(session.title || (shellState.activeSessionId ? "Chat" : "New chat"));
     return () => setTitle(null);
-  }, [session.title, setTitle, shell.activeSessionId]);
+  }, [session.title, setTitle, shellState.activeSessionId]);
 
   const startNew = useCallback(() => {
     setPickerOpen(false);
@@ -100,8 +109,8 @@ export default function GatewayChatPage() {
   useEffect(() => {
     setEnd(
       <div className="flex items-center gap-1">
-        <Badge tone={CONNECTION_TONE[shell.connection]} className="text-xs">
-          {shell.connection === "open" ? (session.model ?? "connected") : shell.connection}
+        <Badge tone={CONNECTION_TONE[shellState.connection]} className="text-xs">
+          {shellState.connection === "open" ? (session.model ?? "connected") : shellState.connection}
         </Badge>
         <Button ghost size="icon" aria-label="Sessions" onClick={() => setPickerOpen(true)}>
           <List className="size-5" />
@@ -112,18 +121,18 @@ export default function GatewayChatPage() {
       </div>,
     );
     return () => setEnd(null);
-  }, [setEnd, shell.connection, session.model, startNew]);
+  }, [setEnd, shellState.connection, session.model, startNew]);
 
   const report = (err: unknown) => showToast(err instanceof Error ? err.message : String(err), "error");
-  const sid = shell.activeSessionId;
+  const sid = shellState.activeSessionId;
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
       <Toast toast={toast} />
-      {shell.connection !== "open" && (
+      {shellState.connection !== "open" && (
         <div className="px-2 py-1 text-xs text-center opacity-70">
-          {shell.connection === "connecting" ? "Connecting to the gateway…" : `Disconnected — retrying (${shell.reconnectAttempt})`}
-          {shell.error ? ` · ${shell.error}` : ""}
+          {shellState.connection === "connecting" ? "Connecting to the gateway…" : `Disconnected — retrying (${shellState.reconnectAttempt})`}
+          {shellState.error ? ` · ${shellState.error}` : ""}
         </div>
       )}
       {session.reclaimed && (
@@ -159,9 +168,11 @@ export default function GatewayChatPage() {
 
       <Composer
         busy={session.busy}
-        disabled={shell.connection !== "open"}
+        disabled={shellState.connection !== "open"}
         onSend={(text) => ctl.submit(text).catch(report)}
         onStop={() => ctl.interrupt().catch(report)}
+        onDictate={shell.available ? () => shell.startDictation() : undefined}
+        prefill={prefill}
       />
 
       {sid && (

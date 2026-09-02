@@ -17,6 +17,9 @@
  */
 import type { ApprovalChoice, ConnectionState, GatewayEvent } from "@hermes/shared";
 
+import { getBackendTarget } from "@/lib/backend-target";
+import { getNativeShellBridge, notificationSnippet, type NativeShellBridge } from "@/lib/native-shell";
+
 import { messagesFromHistory } from "./hydrate";
 import { appendUserMessage, applyGatewayEvent, markInterrupted } from "./reducer";
 import { getSessionState, getShell, hasSession, setSessionState, updateSession, updateShell } from "./store";
@@ -43,6 +46,14 @@ export interface ChatControllerOptions {
   /** Test hooks. */
   setTimer?: (fn: () => void, ms: number) => ReturnType<typeof setTimeout>;
   clearTimer?: (id: ReturnType<typeof setTimeout>) => void;
+  /** Native shell (notifications, foreground service, connectivity); defaults to the installed bridge. */
+  shell?: NativeShellBridge;
+  /** Whether the app is in the background — notifications are raised only then. */
+  isHidden?: () => boolean;
+}
+
+function documentHidden(): boolean {
+  return typeof document !== "undefined" && document.visibilityState === "hidden";
 }
 
 interface SessionRef {
@@ -65,6 +76,8 @@ export class ChatController {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private attempt = 0;
   private unsubscribes: Array<() => void> = [];
+  private shellUnsubscribes: Array<() => void> = [];
+  private permissionAsked = false;
   private readonly opts: Required<Omit<ChatControllerOptions, "createClient">> & Pick<ChatControllerOptions, "createClient">;
 
   constructor(options: ChatControllerOptions) {
@@ -77,8 +90,22 @@ export class ChatController {
       // (the WebView), even though test fakes tolerate it.
       setTimer: (fn, ms) => setTimeout(fn, ms),
       clearTimer: (id) => clearTimeout(id),
+      shell: getNativeShellBridge(),
+      isHidden: documentHidden,
       ...options,
     };
+    const shell = this.opts.shell;
+    this.shellUnsubscribes.push(
+      // A tap on a notification action: only once/deny ever arrive here.
+      shell.on("approvalAction", ({ sessionId, requestId, choice }) => {
+        if (choice !== "once" && choice !== "deny") return;
+        void this.respondApproval(sessionId, requestId, choice).catch(() => {});
+      }),
+      // Wi-Fi came back: don't wait out the backoff (or a cellular timeout).
+      shell.on("networkAvailable", () => {
+        if (getShell().connection !== "open") this.reconnectNow();
+      }),
+    );
   }
 
   get activeSessionId(): string | null {
@@ -110,6 +137,7 @@ export class ChatController {
     }
     this.attempt = 0;
     updateShell({ reconnectAttempt: 0, error: null });
+    this.shieldConnection();
     const active = this.activeSessionId;
     if (active) {
       // After a drop the runtime id is detached and `session.resume` by that
@@ -164,6 +192,34 @@ export class ChatController {
     this.disposed = true;
     if (this.reconnectTimer !== null) this.opts.clearTimer(this.reconnectTimer);
     this.teardownClient();
+    for (const off of this.shellUnsubscribes) off();
+    this.shellUnsubscribes = [];
+    void this.opts.shell.stopForeground();
+  }
+
+  /** Foreground service + notification permission, once the socket is open. */
+  private shieldConnection(): void {
+    const shell = this.opts.shell;
+    if (!shell.available) return;
+    let label = "gateway";
+    try {
+      label = new URL(getBackendTarget().origin).host || label;
+    } catch {
+      /* same-origin target — keep the generic label */
+    }
+    void shell.startForeground(label);
+    if (!this.permissionAsked) {
+      this.permissionAsked = true;
+      // Android 13+: a foreground service started before POST_NOTIFICATIONS
+      // is granted keeps running but its notification never shows, so start
+      // it again once the user has answered the prompt.
+      void shell
+        .requestNotificationPermission()
+        .then((granted) => {
+          if (granted) void shell.startForeground(label);
+        })
+        .catch(() => false);
+    }
   }
 
   private request<T>(method: string, params: Record<string, unknown> = {}): Promise<T> {
@@ -183,6 +239,22 @@ export class ChatController {
       if (requestId) {
         void this.request("approval.received", { session_id: sid, request_id: requestId }).catch(() => {});
       }
+      const approval = getSessionState(sid).approval;
+      if (approval && this.opts.isHidden()) {
+        void this.opts.shell.notifyApproval({
+          sessionId: sid,
+          requestId: approval.requestId,
+          command: approval.command,
+          description: approval.description,
+        });
+      }
+    } else if (event.type === "message.complete" && this.opts.isHidden()) {
+      const text = (event.payload as { text?: string } | undefined)?.text ?? "";
+      void this.opts.shell.notifyTurnComplete({
+        sessionId: sid,
+        text: notificationSnippet(text),
+        title: getSessionState(sid).title ?? "Hermes finished",
+      });
     }
   }
 
@@ -303,6 +375,7 @@ export class ChatController {
     updateSession(sid, (state) =>
       state.approval?.requestId === requestId ? { ...state, approval: null } : state,
     );
+    void this.opts.shell.cancelApprovalNotification(requestId);
     await this.request("approval.respond", { session_id: sid, request_id: requestId, choice });
     await this.replayPendingApproval(sid);
   }

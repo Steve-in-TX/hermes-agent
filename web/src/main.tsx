@@ -11,6 +11,7 @@ import { HERMES_BASE_PATH } from "./lib/api";
 import { isMobileTarget } from "./lib/hermes-target";
 import { bootstrapMobileConnection } from "./lib/mobile-connection";
 import { installNativeAuthIfAvailable } from "./lib/native-auth-capacitor";
+import { installNativeShellIfAvailable } from "./lib/native-shell-capacitor";
 import { installNativeTransportIfAvailable } from "./lib/transport";
 
 async function boot(): Promise<void> {
@@ -19,6 +20,7 @@ async function boot(): Promise<void> {
     // restore the saved gateway connection before anything can request.
     await installNativeTransportIfAvailable();
     await installNativeAuthIfAvailable();
+    await installNativeShellIfAvailable();
     await bootstrapMobileConnection();
   }
 

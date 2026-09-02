@@ -6,10 +6,11 @@ gateway's CORS and WebSocket-Origin guards refuse the WebView origin
 (verified in [`spikes/m0`](spikes/m0/README.md)). The agent itself runs
 elsewhere: point the app at any `hermes serve` bound to a reachable address.
 
-Status: **M4 — mobile polish** on top of the M3 chat. Safe-area-aware
-layout (status bar / gesture bar), light status-bar icons, keyboard-resized
-composer, cleartext warning on the connection screen, sign-in lands on Chat,
-xterm page excluded from the mobile bundle's import graph.
+Status: **M5 — native value-add.** Approval notifications with Approve once /
+Deny actions and a "finished" notification while the app is in the
+background, a foreground service holding the process (and so the socket)
+alive, connectivity-triggered reconnect, share target, and dictation — on top
+of the M3 chat and M4 polish.
 
 ## Layout
 
@@ -23,6 +24,9 @@ apps/mobile/
 │       ├── HermesSocketPlugin.kt   WebSockets over OkHttp (no Origin header)
 │       ├── HermesTokenStore.kt     EncryptedSharedPreferences (Keystore master key)
 │       ├── HermesAuthPlugin.kt     RFC 8252 login, refresh, session store API
+│       ├── HermesShellPlugin.kt    notifications, foreground service, network, share, dictation
+│       ├── HermesConnectionService.kt  foreground service ("Connected to <gateway>")
+│       ├── NotificationActionReceiver.kt  Approve/Deny taps → plugin → JS controller
 │       └── MainActivity.java       registers the plugins
 ├── scripts/mint-token.sh      mint a bearer for the "paste a token" fallback
 ├── testing/
@@ -50,6 +54,24 @@ the app share one bundle, one typecheck, one test suite:
 - `web/src/components/chat/` — `MessageList`, `InputRequestCards`
   (ApprovalCard, ClarifyCard), `SecretPrompts` (sudo/secret bottom sheets),
   `Composer`; `web/src/pages/GatewayChatPage.tsx` ties them together.
+
+## Native shell (M5)
+
+- The JS controller keeps owning the socket; Capacitor never pauses the
+  WebView, so it keeps handling events in the background. The foreground
+  service (`dataSync`, persistent "Connected to <gateway>" notification) only
+  stops Android from killing the process. Android 14+ caps `dataSync` at
+  6 h per 24 h; `remoteMessaging` is the fallback type if that bites.
+- When the app is hidden, `approval.request` raises a high-priority
+  notification with **Approve once** and **Deny** (never `always`, never
+  sudo/secret); `message.complete` raises a "finished" notification. The
+  receiver emits `approvalAction` to the plugin → `approval.respond`; if the
+  process is gone, tapping relaunches the app and the action is delivered
+  once the WebView is back.
+- `ConnectivityManager` → `networkAvailable` → `reconnectNow()`; the app no
+  longer waits out a cellular connect timeout when Wi-Fi returns.
+- Share target (`ACTION_SEND` text/plain) prefills the composer; the mic
+  button uses the system speech recogniser.
 
 ## Chat protocol notes (verified live)
 
@@ -142,6 +164,12 @@ can authenticate to it.
   the app reconnected (after the cellular timeout), the approval card was
   replayed via `approval.pending`, and Deny was applied (the directory
   survived, the tool reported "Command denied").
+
+- M5 on the Pixel 8 Pro: notification permission prompt on first connect;
+  with the app backgrounded, an approval raised a notification carrying the
+  command; **Deny tapped from the shade** reached the gateway (the tool
+  reported "Command denied", the directory survived) and a "Hermes finished"
+  notification followed.
 
 Device findings to carry forward:
 
